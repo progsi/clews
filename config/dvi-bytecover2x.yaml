@@ -1,0 +1,99 @@
+jobname: null           # training script automatically inserts it here
+seed: 43                # must be positive
+checkpoint: null        # if we want to load
+limit_batches: null
+
+path:
+  cache: "cache/"
+  logs: "logs/share/"
+  audio: "data/DiscogsVI/audio/"
+  meta: "cache/tmp-metadata-dvi.pt"
+
+fabric:
+  nnodes: 1
+  ngpus: 1
+  precision: "32"
+
+data:
+  nworkers: 16          # 16, w/ 4 gpus
+  samplerate: 16000     
+  audiolen: 150         # in seconds
+  maxlen: null
+  pad_mode: "repeat"
+  n_per_class: 4
+  p_samesong: 0
+
+augmentations:
+  # -- Time domain --
+  # length:
+  #   p: 1.0
+  #   rmin: 0.6
+  # polarity:
+  #   p: 0.5
+  # compexp:
+  #   p: 0.02
+  #   r: [0.6,1.4]
+  # reqtime:
+  #   p: 0.5
+  #   nfreqs: [1,3]
+  #   gains: [-8,8]
+  #   qrange: [0.5,10.0]
+  # gain:
+  #   p: 0.9
+  #   r: [0.02,1]           # in absolute amplitude
+  # clipping:
+  #   p: 0.01
+  #   max_qtl: 0.3
+  #   p_soft: 0.75
+  # -- CQT domain --
+  specaugment:
+    p: 0.1
+    n: 1 
+    full: true 
+    f_pc: 0.15
+    t_pc: 0.15
+  timestretch:
+    p: 0.1
+    r: [0.6,1.8]
+    pad_mode: "repeat"
+    cut_mode: "random"
+  # reqcqt:
+  #   p: 0.1
+  #   lpf: 0.02
+  #   r: [-1,1]
+  pitchtranspose:
+    p: 0.1
+    r: [-12,12]
+
+model:
+  name: "bytecover2x"
+  shingling:
+    len: 150            # in secs
+    hop: 150
+  cqt:
+    hoplen: 0.023       # in secs
+    noctaves: 7
+    nbinsoct: 12
+    pool:
+      len: 5           # in hops
+      hop: 5
+  ncha: 2048
+  zdim: 1536
+  maxcliques: 100000
+  smooth: 0.1
+  margin: 0.3
+  lamb: 0
+
+training:
+  batchsize: 25         # using 2 GPUs         
+  numepochs: 1000
+  save_freq: null       # in epochs
+  optim:
+    name: "adam"
+    lr: 3e-4
+    wd: 0
+    sched: "plateau_10"
+    min_lr: 1e-6
+  monitor:
+    quantity: "m_COMP"
+    mode: "min"

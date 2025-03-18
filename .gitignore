@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+
+.vscode/
+.venv/
+myslurm/
+
+cache
+data
+logs
+
+*.wav
+*.flac
+*.pt
+*.pdf
