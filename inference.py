@@ -16,6 +16,7 @@ parser.add_argument("--path_in", type=str, default=None)
 parser.add_argument("--path_out", type=str, default=None)
 parser.add_argument("--fn_in", type=str, default=None)
 parser.add_argument("--fn_out", type=str, default=None)
+parser.add_argument("--device", type=str, default="cuda")
 parser.add_argument("--hop_size", type=float, default=5.0)
 parser.add_argument("--win_len", type=float, default=-1)  # will use model's default
 args = parser.parse_args()
@@ -34,12 +35,6 @@ if (not (using_paths or using_filenames)) and conflicting:
         '       Use either "--path_in=xxx --path_out=yyy" or "--fn_in=xxx.wav --fn_out=yyy.pt".'
     )
     sys.exit()
-if using_paths:
-    args.path_in = os.path.abspath(args.path_in)
-    args.path_out = os.path.abspath(args.path_out)
-elif using_filenames:
-    args.fn_in = os.path.abspath(args.fn_in)
-    args.fn_out = os.path.abspath(args.fn_out)
 print("=" * 100)
 print(args)
 print("=" * 100)
@@ -59,7 +54,7 @@ torch.backends.cudnn.deterministic = False
 torch.set_float32_matmul_precision("medium")
 torch.autograd.set_detect_anomaly(False)
 fabric = Fabric(
-    accelerator="cuda",
+    accelerator=args.device,
     devices=1,
     num_nodes=1,
     strategy=DDPStrategy(broadcast_buffers=False),
