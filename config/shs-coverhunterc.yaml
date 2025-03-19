@@ -5,9 +5,9 @@ limit_batches: null
 
 path:
   cache: "cache/"
-  logs: "logs/share/"
-  audio: "data/SHS100K/audio/proc/mp3-16k-mo-matched/"
-  meta: "cache/tmp-metadata-shs.pt"
+  logs: "logs/"
+  audio: "data/SHS100K/audio/"
+  meta: "cache/metadata-shs.pt"
 
 fabric:
   nnodes: 1
