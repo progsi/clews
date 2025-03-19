@@ -96,6 +96,7 @@ if using_paths:
             # Get full filename
             fn_in = os.path.join(path, file)
             fn_out = os.path.join(args.path_out, os.path.relpath(fn_in, args.path_in))
+            fn_out = os.path.splitext(fn_out)[0] + ".pt"
             path_out, _ = os.path.split(fn_out)
             filenames.append([fn_in, path_out, fn_out])
 else:
@@ -113,7 +114,7 @@ with torch.inference_mode():
             continue
         # Compute embeddings
         z = model(x, shingle_hop=args.hop_size, shingle_len=args.win_len)
-        z = z.cpu()
+        z = z.squeeze(0).cpu()
         # Save
         os.makedirs(path_out, exist_ok=True)
         torch.save(z, fn_out)
