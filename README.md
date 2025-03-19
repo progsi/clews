@@ -22,7 +22,7 @@ J. Serrà, R. O. Araz, D. Bogdanov, & Y. Mitsufuji (2025). Supervised Contrastiv
 
 CLEWS requires python>=3.10. We used python 3.10.13.
 
-You can create the environment by running [install_requirements.sh](install_requirements.sh). Otherwise just check inside that file and do it yourself.
+You should be able to create the environment by running [install_requirements.sh](install_requirements.sh). However, we recommend to just check inside that file and do it step by step.
 
 ## Operation
 
@@ -42,10 +42,12 @@ OMP_NUM_THREADS=1 python inference.py --checkpoint=logs/model/checkpoint_best.ck
 
 ## Training and testing
 
+Note: Training and testing assume you have at least one GPU.
+
 ### Folder structure
 
 Apart from the structure of this repo, we used the following folders:
-* `data`: folder pointing to original audio and metadata files.
+* `data`: folder pointing to original audio and metadata files (can be a symbolic link).
 * `cache`: folder where to store preprocessed metadata files.
 * `logs`: folder where to output checkpoints and tensorboard files.
 
@@ -56,15 +58,15 @@ You should create/organize those folders prior to running any training/testing s
 To launch the data preprocessing script, you can run, for instance:
 
 ```bash
-OMP_NUM_THREADS=1 python data_preproc.py --njobs=16 --dataset=SHS100K --path_meta=data/SHS100K/meta/ --path_audio=data/SHS100K/audio/ --ext_in=mp3 --fn_out=cache/tmp-metadata-shs.pt
-OMP_NUM_THREADS=1 python data_preproc.py --njobs=16 --dataset=DiscogsVI --path_meta=data/DiscogsVI/meta/ --path_audio=data/DiscogsVI/audio/ --ext_in=mp3 --fn_out=cache/tmp-metadata-dvi.pt
+OMP_NUM_THREADS=1 python data_preproc.py --njobs=16 --dataset=SHS100K --path_meta=data/SHS100K/meta/ --path_audio=data/SHS100K/audio/ --ext_in=mp3 --fn_out=cache/metadata-shs.pt
+OMP_NUM_THREADS=1 python data_preproc.py --njobs=16 --dataset=DiscogsVI --path_meta=data/DiscogsVI/meta/ --path_audio=data/DiscogsVI/audio/ --ext_in=mp3 --fn_out=cache/metadata-dvi.pt
 ```
 
-This script takes time as it reads/checks every audio file (so that you do not need to run checks while training, or in your dataloader). You just do this once and save the corresponding metadata file.
+This script takes time as it reads/checks every audio file (so that you do not need to run checks while training or in your dataloader). You just do this once and save the corresponding metadata file. Depending on the path names/organization of your data set it is possible that you have to modify some minor portions of the `data_preproc.py` script.
 
 ### Training
 
-First, you need to clean the logs path and copy the configuration file (with the specific name `configuration.yaml`):
+Before every training run, you need to clean the logs path and copy the configuration file (with the specific name `configuration.yaml`):
 ```bash
 rm -rf logs/shs-clews/ ; mkdir logs/shs-clews/ ; cp config/shs-clews.yaml logs/shs-clews/configuration.yaml
 rm -rf logs/dvi-clews/ ; mkdir logs/dvi-clews/ ; cp config/dvi-clews.yaml logs/dvi-clews/configuration.yaml

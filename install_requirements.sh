@@ -1,7 +1,7 @@
 # We assume python>=3.10
 
 # --- Create environment and activate ---
-python -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
 
 # --- Pytorch ---
@@ -16,12 +16,12 @@ pip install joblib==1.4.2
 
 # --- For my audio_utils ---
 pip install soundfile==0.12.1 soxr==0.3.7 nnAudio==0.3.3
+# Need to downgrade numpy for soxr
+pip install numpy==1.26.4
 # ffmpeg needs to be installed. Can do it through conda if you do not have sudo privileges:
 conda install -c conda-forge 'ffmpeg<7'
 # Alternatively, use:
 #sudo apt install ffmpeg
-# Need to downgrade numpy for soxr
-pip install numpy==1.26.4
 
 # --- For data augmentation (may be imported but unused) ---
 pip install julius==0.2.7
