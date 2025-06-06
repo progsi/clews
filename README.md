@@ -1,6 +1,6 @@
 # Supervised Contrastive Learning from Weakly-Labeled Audio Segments for Musical Version Matching
 
-_This is the repository for the CLEWS paper. It includes the code to train and evaluate the main models we consider (including baselines), checkpoints for DVI and SHS data sets, and a basic inference script. We do not include the ablation experiments._
+_This repository is a fork of *CLEWs* to benchmark the *DVI2* datasets._
 
 ### Abstract
 
@@ -54,7 +54,18 @@ Apart from the structure of this repo, we used the following folders:
 You should create/organize those folders prior to running any training/testing script. The folders are not necessary for regular operation/inference.
 
 ### Preprocessing
+#### DVI2 datasets
 
+The repo of `discogs-vi-2` needs to be in the same dir as this repo and the dataset files need to be extracted in its data subdirectory. Then run the script ```make_datas.sh```. 
+
+Then:
+```bash
+python data_preproc.py --njobs=16 --dataset=DVI2 --path_meta=data/dvi2/ --path_audio=data/dvi2/audio/mp4/ --ext_in=mp4/ --fn_out=cache/metadata-dvi2.pt
+python data_preproc.py --njobs=16 --dataset=DVI2 --path_meta=data/dvi2fm_light/ --path_audio=data/dvi2/audio/mp4/ --ext_in=mp4/ --fn_out=cache/metadata-dvi2fm_light.pt
+
+```
+
+#### Other datasets
 To launch the data preprocessing script, you can run, for instance:
 
 ```bash

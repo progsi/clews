@@ -9,7 +9,7 @@ from utils import file_utils, audio_utils, print_utils
 
 parser = argparse.ArgumentParser()
 parser.add_argument(
-    "--dataset", type=str, choices=["SHS100K", "covers80", "DiscogsVI"], required=True
+    "--dataset", type=str, choices=["SHS100K", "covers80", "DiscogsVI", "DiscogsVI2", "DVI2"], required=True
 )
 parser.add_argument("--path_meta", type=str, default="data/xxx", required=True)
 parser.add_argument("--path_audio", type=str, default="data/yyy", required=True)
@@ -104,7 +104,23 @@ timer = print_utils.Timer()
 
 # Load cliques and splits
 print(f"Load {args.dataset}")
-if args.dataset == "SHS100K":
+if args.dataset in ["DiscogsVI2", "DVI2"]:
+    # ********* DiscogsVI **********
+    # Splits + Info
+    splits = {}
+    info = {}
+    i = 0
+    for sp in ["train", "valid", "test"]:
+        fn = os.path.join(args.path_meta, sp + ".json")
+        cliques, infosp, i, notfound = load_cliques_discogsvi(fn, i=i)
+        splits[sp] = cliques
+        info.update(infosp)
+        if notfound > 0:
+            print(f"({sp}: Could not find {notfound} songs)")
+        else:
+            print(f"({sp}: Found all songs)")
+            
+elif args.dataset == "SHS100K":
 
     # ********** SHS100K **********
     # Info
@@ -146,6 +162,23 @@ elif args.dataset == "DiscogsVI":
         else:
             print(f"({sp}: Found all songs)")
 
+elif args.dataset == "DiscogsVI2":
+
+    # ********* DiscogsVI **********
+    # Splits + Info
+    splits = {}
+    info = {}
+    i = 0
+    for sp, suff in zip(["train", "valid", "test"], [".train", ".val", ".test"]):
+        fn = os.path.join(args.path_meta, "DiscogsVI-YT-20240701-light.json" + suff)
+        cliques, infosp, i, notfound = load_cliques_discogsvi(fn, i=i)
+        splits[sp] = cliques
+        info.update(infosp)
+        if notfound > 0:
+            print(f"({sp}: Could not find {notfound} songs)")
+        else:
+            print(f"({sp}: Found all songs)")
+            
 elif args.dataset == "covers80":
 
     # ********* covers80 **********
