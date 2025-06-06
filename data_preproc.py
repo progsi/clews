@@ -3,7 +3,7 @@ import os
 import argparse
 from tqdm import tqdm
 import torch
-from joblib import Parallel, delayed
+import multiprocessing
 
 from utils import file_utils, audio_utils, print_utils
 
@@ -48,7 +48,7 @@ def load_cliques_discogsvi(fn, i=0):
     cliques = {}
     cliqueinfo = {}
     notfound = 0
-    # istart = i
+    istart = i
     for c, versions in tqdm(jsoncliques.items(), total=len(jsoncliques), desc="Load cliques..."):
         clique = []
         for ver in versions:
@@ -87,11 +87,9 @@ def load_cliques_discogsvi(fn, i=0):
                 "filename": os.path.join(basename + "." + args.ext_in),
             }
             i += 1
-            # if i == istart + 1000:
-            #     break
+
         cliques[c] = clique
-        # if i == istart + 1000:
-        #   break 
+
     print()
     return cliques, cliqueinfo, i, notfound
 
@@ -225,25 +223,27 @@ print("  Contains:", nsongs)
 
 
 def get_file_info(idx, info):
-    fn = os.path.join(args.path_audio, info["filename"])
-    print(f"\r[{timer.time()}] " + fn, end=" ", flush=True)
-    # Check if exists (safe load) # NOTE: might be slower, since we load the whole file
-    x = audio_utils.load_audio(
-        fn, sample_rate=16000, n_channels=1, start=0, length=None
-    )
-    if x is None or x.size(-1) < 16000:
-        return None, None
-    # Get info
     try:
-        audio_info = audio_utils.get_info(fn)
-    except:
+        fn = os.path.join(args.path_audio, info["filename"])
+        x = audio_utils.load_audio(fn, sample_rate=16000, n_channels=1, start=0, length=None)
+        if x is None or x.size(-1) < 16000:
+            return None, None
+        try:
+            audio_info = audio_utils.get_info(fn)
+        except Exception as e:
+            print(f"Failed to get info for {fn}: {e}")
+            return None, None
+
+        info["samplerate"] = audio_info.samplerate
+        info["length"] = audio_info.length
+        info["channels"] = audio_info.channels
+        return idx, info
+    except Exception as e:
+        print(f"Exception in get_file_info for {idx}: {e}")
         return None, None
-    info["samplerate"] = audio_info.samplerate
-    info["length"] = audio_info.length
-    info["channels"] = audio_info.channels
-    return idx, info
 
-
+def worker(idx):
+    return get_file_info(idx, info[idx])
 ###############################################################################
 
 # Filter existing ones
@@ -252,18 +252,21 @@ keys = list(info.keys())
 keys.sort()
 if args.njobs == 1:
     done = []
-    for idx in keys:
+    for idx in tqdm(keys):
         fn = os.path.join(args.path_audio, info[idx]["filename"])
         if os.path.exists(fn):
-            done.append(get_file_info(idx, info[idx]))
+            done.append(get_file_info(idx, info[idx], args.path_audio))
+
 else:
-    todo = []
-    for idx in tqdm(keys, ncols=100, ascii=True):
-        fn = os.path.join(args.path_audio, info[idx]["filename"])
-        if os.path.exists(fn):
-            job = delayed(get_file_info)(idx, info[idx])
-            todo.append(job)
-    done = Parallel(n_jobs=args.njobs)(todo)
+    # NOTE: I am running into issues with joblib
+    # todo = []
+    # for idx in keys:
+    #     fn = os.path.join(args.path_audio, info[idx]["filename"])
+    #     if os.path.exists(fn):
+    #         job = delayed(get_file_info)(idx, info[idx], args.path_audio)
+    #         todo.append(job)
+    with multiprocessing.Pool(args.njobs) as pool:
+        done = pool.map(worker, [idx for idx in keys if os.path.exists(os.path.join(args.path_audio, info[idx]["filename"]))])
 print()
 new_info = {}
 for idx, inf in done:
