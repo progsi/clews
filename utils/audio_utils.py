@@ -9,7 +9,7 @@ import warnings
 
 
 def get_backend(filename):
-    if filename.lower().endswith(".mp3"):
+    if filename.lower().endswith(".mp3") or filename.lower().endswith(".mp4"):
         backend = "ffmpeg"
     else:
         backend = "soundfile"

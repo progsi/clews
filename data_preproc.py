@@ -49,11 +49,9 @@ def load_cliques_discogsvi(fn, i=0):
     cliqueinfo = {}
     notfound = 0
     # istart = i
-    for c, versions in jsoncliques.items():
+    for c, versions in tqdm(jsoncliques.items(), total=len(jsoncliques), desc="Load cliques..."):
         clique = []
         for ver in versions:
-            print(f"\r  Version {i+1}", end=" ")
-            sys.stdout.flush()
             v = ver["version_id"]
             ytid = ver["youtube_id"]
             idx = c + ":" + v
@@ -93,7 +91,7 @@ def load_cliques_discogsvi(fn, i=0):
             #     break
         cliques[c] = clique
         # if i == istart + 1000:
-        #     break
+        #   break 
     print()
     return cliques, cliqueinfo, i, notfound
 
@@ -110,7 +108,7 @@ if args.dataset in ["DiscogsVI2", "DVI2"]:
     splits = {}
     info = {}
     i = 0
-    for sp in ["train", "valid", "test"]:
+    for sp in ["train", "val", "test"]:
         fn = os.path.join(args.path_meta, sp + ".json")
         cliques, infosp, i, notfound = load_cliques_discogsvi(fn, i=i)
         splits[sp] = cliques
@@ -229,9 +227,9 @@ print("  Contains:", nsongs)
 def get_file_info(idx, info):
     fn = os.path.join(args.path_audio, info["filename"])
     print(f"\r[{timer.time()}] " + fn, end=" ", flush=True)
-    # Check if exists (safe load)
+    # Check if exists (safe load) # NOTE: might be slower, since we load the whole file
     x = audio_utils.load_audio(
-        fn, sample_rate=16000, n_channels=1, start=16000, length=16000
+        fn, sample_rate=16000, n_channels=1, start=0, length=None
     )
     if x is None or x.size(-1) < 16000:
         return None, None
