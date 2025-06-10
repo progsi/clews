@@ -132,7 +132,7 @@ def weight_decay(
 def get_logger(path, logger, name):
     if logger == "wandb":
         return WandbLogger(
-            project="clews",
+            project="dvi2",
             name=name,
             save_dir=path,
             log_model=False,
