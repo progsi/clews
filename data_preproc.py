@@ -106,7 +106,7 @@ if args.dataset in ["DiscogsVI2", "DVI2"]:
     splits = {}
     info = {}
     i = 0
-    for sp in ["train", "val", "test"]:
+    for sp in ["train", "valid", "test"]:
         fn = os.path.join(args.path_meta, sp + ".json")
         cliques, infosp, i, notfound = load_cliques_discogsvi(fn, i=i)
         splits[sp] = cliques
@@ -142,23 +142,6 @@ elif args.dataset == "SHS100K":
     # *****************************
 
 elif args.dataset == "DiscogsVI":
-
-    # ********* DiscogsVI **********
-    # Splits + Info
-    splits = {}
-    info = {}
-    i = 0
-    for sp, suff in zip(["train", "valid", "test"], [".train", ".val", ".test"]):
-        fn = os.path.join(args.path_meta, "DiscogsVI-YT-20240701-light.json" + suff)
-        cliques, infosp, i, notfound = load_cliques_discogsvi(fn, i=i)
-        splits[sp] = cliques
-        info.update(infosp)
-        if notfound > 0:
-            print(f"({sp}: Could not find {notfound} songs)")
-        else:
-            print(f"({sp}: Found all songs)")
-
-elif args.dataset == "DiscogsVI2":
 
     # ********* DiscogsVI **********
     # Splits + Info

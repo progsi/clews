@@ -56,15 +56,15 @@ def load_audio(
     if safe_load:
         try:
             x, sr = load()
-        except:
-            print("\nWARNING: Could not load " + filename, flush=True)
+        except Exception as e:
+            print("\nEnWARNING: Could not load " + filename + f" due to {e}", flush=True)
             print(start, length, flush=True)
             return None
     else:
         try:
             x, sr = load()
         except:
-            print("\nERROR: Could not load " + filename, flush=True)
+            print("\nEnWARNING: Could not load " + filename + f" due to {e}", flush=True)
             print(start, length, flush=True)
             x, sr = load()
     # Adjust channels
