@@ -2,6 +2,7 @@ import sys
 import torch
 from lightning.fabric.utilities import AttributeDict
 from lightning.fabric.loggers import TensorBoardLogger
+from wandb.integration.lightning.fabric import WandbLogger
 
 ###################################################################################################
 
@@ -128,13 +129,22 @@ def weight_decay(
 ###################################################################################################
 
 
-def get_logger(path):
-    return TensorBoardLogger(
-        root_dir=path,
-        name="",
-        version="",
-        default_hp_metric=False,
-    )
+def get_logger(path, logger, name):
+    if logger == "wandb":
+        return WandbLogger(
+            project="clews",
+            name=name,
+            save_dir=path,
+            log_model=False,
+        )
+    else:
+        return TensorBoardLogger(
+            root_dir=path,
+            name=name,
+            version="",
+            default_hp_metric=False,
+        )
+
 
 
 ###################################################################################################

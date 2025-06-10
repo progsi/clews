@@ -39,7 +39,7 @@ fabric = Fabric(
     num_nodes=conf.fabric.nnodes,
     strategy=DDPStrategy(broadcast_buffers=False),
     precision=conf.fabric.precision,
-    loggers=pytorch_utils.get_logger(conf.path.logs),
+    loggers=pytorch_utils.get_logger(conf.path.logs, logger = conf.logger, name = conf.jobname),
 )
 fabric.launch()
 

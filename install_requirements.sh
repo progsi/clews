@@ -25,3 +25,5 @@ conda install -c conda-forge 'ffmpeg<7'
 
 # --- For data augmentation (may be imported but unused) ---
 pip install julius==0.2.7
+
+pip install wandb

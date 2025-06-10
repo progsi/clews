@@ -2,6 +2,7 @@ jobname: null           # training script automatically inserts it here
 seed: 43                # must be positive
 checkpoint: null        # if we want to load
 limit_batches: null
+logger: "wandb"
 
 path:
   cache: "cache/"
