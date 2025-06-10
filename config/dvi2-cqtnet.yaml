@@ -6,8 +6,8 @@ limit_batches: null
 path:
   cache: "cache/"
   logs: "logs/"
-  audio: "data/DiscogsVI/audio/"
-  meta: "cache/metadata-dvi.pt"
+  audio: "data/audio/"
+  meta: "cache/metadata-dvi2.pt"
 
 fabric:
   nnodes: 1
@@ -47,13 +47,13 @@ augmentations:
   #   p_soft: 0.75
   # -- CQT domain --
   specaugment:
-    p: 0.1
+    p: 0.4
     n: 1 
     full: true 
     f_pc: 0.15
     t_pc: 0.15
   timestretch:
-    p: 0.1
+    p: 0.3
     r: [0.6,1.8]
     pad_mode: "repeat"
     cut_mode: "random"
@@ -62,11 +62,11 @@ augmentations:
   #   lpf: 0.02
   #   r: [-1,1]
   pitchtranspose:
-    p: 0.1
+    p: 0.5
     r: [-12,12]
 
 model:
-  name: "dvinetp"
+  name: "cqtnet"
   shingling:
     len: 150            # in secs
     hop: 150
@@ -77,10 +77,8 @@ model:
     pool:
       len: 17           # in hops
       hop: 15
-  ncha_in: 48
-  zdim: 512
-  margin: 0.3
-  lamb: 0.02
+  zdim: 300
+  maxcliques: 100000
 
 training:
   batchsize: 25         # using 2 GPUs         
@@ -93,5 +91,5 @@ training:
     sched: "plateau_10"
     min_lr: 1e-6
   monitor:
-    quantity: "m_COMP"
-    mode: "min"
+    quantity: "m_MAP"
+    mode: "max"

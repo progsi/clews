@@ -6,8 +6,8 @@ limit_batches: null
 path:
   cache: "cache/"
   logs: "logs/"
-  audio: "data/SHS100K/audio/"
-  meta: "cache/metadata-shs.pt"
+  audio: "data/audio/"
+  meta: "cache/metadata-dvi2fm_light.pt"
 
 fabric:
   nnodes: 1
@@ -66,19 +66,23 @@ augmentations:
     r: [-12,12]
 
 model:
-  name: "cqtnet"
+  name: "bytecover2x"
   shingling:
     len: 150            # in secs
     hop: 150
   cqt:
-    hoplen: 0.02        # in seconds
-    noctaves: 7         # 8 
+    hoplen: 0.023       # in secs
+    noctaves: 7
     nbinsoct: 12
     pool:
-      len: 17           # in hops
-      hop: 15
-  zdim: 300
+      len: 5           # in hops
+      hop: 5
+  ncha: 2048
+  zdim: 1536
   maxcliques: 100000
+  smooth: 0.1
+  margin: 0.3
+  lamb: 0
 
 training:
   batchsize: 25         # using 2 GPUs         

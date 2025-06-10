@@ -6,8 +6,8 @@ limit_batches: null
 path:
   cache: "cache/"
   logs: "logs/"
-  audio: "data/SHS100K/audio/"
-  meta: "cache/metadata-shs.pt"
+  audio: "data/audio/"
+  meta: "cache/metadata-dvi2.pt"
 
 fabric:
   nnodes: 1
@@ -47,13 +47,13 @@ augmentations:
   #   p_soft: 0.75
   # -- CQT domain --
   specaugment:
-    p: 0.4
+    p: 0.1
     n: 1 
     full: true 
     f_pc: 0.15
     t_pc: 0.15
   timestretch:
-    p: 0.3
+    p: 0.1
     r: [0.6,1.8]
     pad_mode: "repeat"
     cut_mode: "random"
@@ -62,34 +62,27 @@ augmentations:
   #   lpf: 0.02
   #   r: [-1,1]
   pitchtranspose:
-    p: 0.5
+    p: 0.1
     r: [-12,12]
 
 model:
-  name: "clews"
+  name: "bytecover2x"
   shingling:
-    len: 20             # in secs
-    hop: 20
+    len: 150            # in secs
+    hop: 150
   cqt:
-    hoplen: 0.02        # in secs
+    hoplen: 0.023       # in secs
     noctaves: 7
     nbinsoct: 12
-    fscale: 1
-    pool: 5             # in hops
-  frontend:
-    cqtpow: 0.5
-    channels: [128,256]
-  backbone:
-    blocks: [3,4,6,3]
-    channels: [256,512,1024,2048]
-    down: [1,2,2,1]
-  zdim: 2048
-  loss:
-    redux:
-      pos: "bpwr-5"
-      neg: "min"
-    gamma: 5
-    epsilon: 1e-6
+    pool:
+      len: 5           # in hops
+      hop: 5
+  ncha: 2048
+  zdim: 1536
+  maxcliques: 100000
+  smooth: 0.1
+  margin: 0.3
+  lamb: 0
 
 training:
   batchsize: 25         # using 2 GPUs         
@@ -97,10 +90,10 @@ training:
   save_freq: null       # in epochs
   optim:
     name: "adam"
-    lr: 2e-4
+    lr: 3e-4
     wd: 0
     sched: "plateau_10"
     min_lr: 1e-6
   monitor:
-    quantity: "m_MAP"
-    mode: "max"
+    quantity: "m_COMP"
+    mode: "min"

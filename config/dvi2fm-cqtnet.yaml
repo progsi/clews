@@ -6,8 +6,8 @@ limit_batches: null
 path:
   cache: "cache/"
   logs: "logs/"
-  audio: "data/SHS100K/audio/"
-  meta: "cache/metadata-shs.pt"
+  audio: "data/audio/"
+  meta: "cache/metadata-dvi2.pt"
 
 fabric:
   nnodes: 1
@@ -66,7 +66,7 @@ augmentations:
     r: [-12,12]
 
 model:
-  name: "dvinetp"
+  name: "cqtnet"
   shingling:
     len: 150            # in secs
     hop: 150
@@ -77,10 +77,8 @@ model:
     pool:
       len: 17           # in hops
       hop: 15
-  ncha_in: 48
-  zdim: 512
-  margin: 0.3
-  lamb: 0.02
+  zdim: 300
+  maxcliques: 100000
 
 training:
   batchsize: 25         # using 2 GPUs         
