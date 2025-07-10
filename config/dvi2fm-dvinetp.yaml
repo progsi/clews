@@ -16,7 +16,7 @@ fabric:
   precision: "32"
 
 data:
-  nworkers: 16          # 16, w/ 4 gpus
+  nworkers: 8          # 16, w/ 4 gpus
   samplerate: 16000     
   audiolen: 150         # in seconds
   maxlen: null

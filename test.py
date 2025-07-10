@@ -75,7 +75,9 @@ fabric.barrier()
 # Load conf
 myprint(OmegaConf.to_yaml(args))
 myprint("Load model conf...")
-conf = OmegaConf.load(os.path.join(log_path, "configuration.yaml"))
+# conf = OmegaConf.load(os.path.join(log_path, "configuration.yaml"))
+conf = OmegaConf.load(args.conf)
+
 
 # Init model
 myprint("Init model...")
