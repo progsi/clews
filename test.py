@@ -149,14 +149,21 @@ def extract_embeddings(shingle_len, shingle_hop, desc="Embed", eps=1e-6):
                 shingle_len=int(x.size(1) / model.sr) if shinglen <= 0 else shinglen,
                 shingle_hop=int(0.99 * x.size(1) / model.sr) if shinghop <= 0 else shinghop,
             )
-        except Exception as e:
-            myprint("==============================")
-            myprint(f"  Error: {e}]")
-            myprint(f"  Skipping this batch of shape {x.shape}")
-            myprint(f"  c: {c}\ni: {i}")
-            myprint("==============================")
-            skipped += 1
-            continue
+        except RuntimeError as e:
+            if "CUDA out of memory" in str(e):
+                myprint("==============================")
+                myprint("  CUDA OOM Error")
+                myprint(f"  Skipping this batch of shape {x.shape}")
+                myprint(f"  shinglen: {shinglen}, shinghop: {shinghop}")
+                myprint(f"  mxlen: {mxlen}, numshingles: {numshingles}")
+                myprint(f"  c: {c}\ni: {i}")
+                myprint("==============================")
+                skipped += 1
+                torch.cuda.empty_cache()  # 🔁 Clean up memory
+                continue
+            else:
+                raise  # Re-raise other RuntimeErrors
+            
         # Make embedding shingles same size
         z = tops.force_length(
             z,
