@@ -132,6 +132,7 @@ def extract_embeddings(shingle_len, shingle_hop, desc="Embed", eps=1e-6):
     mxlen = int(args.maxlen * model.sr)
     numshingles = int((mxlen - int(shinglen * model.sr)) / int(shinghop * model.sr))
     # Extract embeddings
+    skipped = 0
     all_c = []
     all_i = []
     all_z = []
@@ -142,11 +143,20 @@ def extract_embeddings(shingle_len, shingle_hop, desc="Embed", eps=1e-6):
         if x.size(1) > mxlen:
             x = x[:, :mxlen]
         # Get embedding (B=1,S,C)
-        z = model(
-            x,
-            shingle_len=int(x.size(1) / model.sr) if shinglen <= 0 else shinglen,
-            shingle_hop=int(0.99 * x.size(1) / model.sr) if shinghop <= 0 else shinghop,
-        )
+        try:
+            z = model(
+                x,
+                shingle_len=int(x.size(1) / model.sr) if shinglen <= 0 else shinglen,
+                shingle_hop=int(0.99 * x.size(1) / model.sr) if shinghop <= 0 else shinghop,
+            )
+        except Exception as e:
+            myprint("==============================")
+            myprint(f"  Error: {e}]")
+            myprint(f"  Skipping this batch of shape {x.shape}")
+            myprint(f"  c: {c}\ni: {i}")
+            myprint("==============================")
+            skipped += 1
+            continue
         # Make embedding shingles same size
         z = tops.force_length(
             z,
@@ -171,6 +181,7 @@ def extract_embeddings(shingle_len, shingle_hop, desc="Embed", eps=1e-6):
     all_i = torch.cat(all_i, dim=0)
     all_z = torch.cat(all_z, dim=0)
     all_m = torch.cat(all_m, dim=0)
+    myprint(f"Skipped {skipped} items.")
     # Return
     return all_c, all_i, all_z, all_m
 
