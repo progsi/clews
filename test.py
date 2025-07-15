@@ -205,8 +205,9 @@ with torch.inference_mode():
 
     # Extract embeddings
     if args.jobname is not None:
-        outpath = os.path.join(log_path, f"{args.jobname}.pt")
-        outpath2 = os.path.join(log_path, f"{args.jobname}2.pt")
+        test_subset = args.jobname.split(".")[0].split("-")[-1]
+        outpath = os.path.join(log_path, f"test_{test_subset}.h5py")
+        outpath2 = os.path.join(log_path, f"test_{test_subset}2.h5py")
     else:
         outpath, outpath2 = None
     
