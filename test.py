@@ -186,16 +186,17 @@ def extract_embeddings(shingle_len, shingle_hop, desc="Embed", eps=1e-6, outpath
         file_utils.save_to_hdf5(
             outpath,
             {
-                "codes": torch.cat(all_c, dim=0),
-                "indices": torch.cat(all_i, dim=0),
-                "embeddings": torch.cat(all_z, dim=0),
-                "mask": torch.cat(all_m, dim=0),
+                "clique": torch.cat(all_c, dim=0),
+                "index": torch.cat(all_i, dim=0),
+                "z": torch.cat(all_z, dim=0),
+                "m": torch.cat(all_m, dim=0),
             },
             batch_start=total_saved,
         )
         myprint(f"Saved final chunk → total {total_saved + all_z[0].shape[0] * len(all_z)} samples")
 
     myprint(f"Skipped {skipped} items.")
+    
 
 
 ###############################################################################
@@ -212,16 +213,13 @@ with torch.inference_mode():
         outpath, outpath2 = None
     
     expected_len = len(dloader)
-    if outpath is not None and file_utils.has_extracted_on_disk(outpath, expected_len):
-        query_c, query_i, query_z, query_m = file_utils.load_from_hdf5(outpath)
-    else:
-        query_c, query_i, query_z, query_m = extract_embeddings(
+    if outpath is None or not file_utils.has_extracted_on_disk(outpath, expected_len):
+        extract_embeddings(
             args.qslen, args.qshop, desc="Query emb", outpath=outpath
         )
         
-    query_c, query_i, query_z, query_m = extract_embeddings(
-        args.qslen, args.qshop, desc="Query emb", outpath=outpath
-    )
+    query_c, query_i, query_z, query_m = file_utils.load_from_hdf5(outpath)
+        
     query_c = query_c.int()
     query_i = query_i.int()
     query_z = query_z.half()
@@ -234,12 +232,12 @@ with torch.inference_mode():
             query_m.clone(),
         )
     else:
-        if outpath is not None and file_utils.has_extracted_on_disk(outpath2, expected_len):
-            cand_c, cand_i, cand_z, cand_m = file_utils.load_from_hdf5(outpath2)
-        else:
+        if outpath is None or not file_utils.has_extracted_on_disk(outpath2, expected_len):
             query_c, query_i, cand_z, cand_m = extract_embeddings(
                 args.qslen, args.qshop, desc="Query emb", outpath=outpath2
             )
+        cand_c, cand_i, cand_z, cand_m = file_utils.load_from_hdf5(outpath2)
+        
         cand_c = cand_c.int()
         cand_i = cand_i.int()
         cand_z = cand_z.half()
