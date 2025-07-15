@@ -8,7 +8,7 @@ from lightning.fabric.strategies import DDPStrategy
 
 from lib import eval, dataset
 from lib import tensor_ops as tops
-from utils import pytorch_utils, print_utils
+from utils import pytorch_utils, print_utils, file_utils
 
 # --- Get arguments (and set defaults) --- Basic ---
 args = OmegaConf.from_cli()
@@ -122,8 +122,7 @@ dloader = fabric.setup_dataloaders(dloader)
 
 
 @torch.inference_mode()
-def extract_embeddings(shingle_len, shingle_hop, desc="Embed", eps=1e-6):
-    # Check shingle args
+def extract_embeddings(shingle_len, shingle_hop, desc="Embed", eps=1e-6, outpath=None, save_every=1000):
     shinglen, shinghop = model.get_shingle_params()
     if shingle_len is not None:
         shinglen = shingle_len
@@ -131,18 +130,16 @@ def extract_embeddings(shingle_len, shingle_hop, desc="Embed", eps=1e-6):
         shinghop = shingle_hop
     mxlen = int(args.maxlen * model.sr)
     numshingles = int((mxlen - int(shinglen * model.sr)) / int(shinghop * model.sr))
-    # Extract embeddings
+
     skipped = 0
-    all_c = []
-    all_i = []
-    all_z = []
-    all_m = []
-    for batch in myprogbar(dloader, desc=desc, leave=True):
-        # Get info & audio
+    all_c, all_i, all_z, all_m = [], [], [], []
+    total_saved = 0
+
+    for step, batch in enumerate(myprogbar(dloader, desc=desc, leave=True)):
         c, i, x = batch[:3]
         if x.size(1) > mxlen:
             x = x[:, :mxlen]
-        # Get embedding (B=1,S,C)
+
         try:
             z = model(
                 x,
@@ -151,46 +148,54 @@ def extract_embeddings(shingle_len, shingle_hop, desc="Embed", eps=1e-6):
             )
         except RuntimeError as e:
             if "CUDA out of memory" in str(e):
-                myprint("==============================")
-                myprint("  CUDA OOM Error")
-                myprint(f"  Skipping this batch of shape {x.shape}")
-                myprint(f"  shinglen: {shinglen}, shinghop: {shinghop}")
-                myprint(f"  mxlen: {mxlen}, numshingles: {numshingles}")
-                myprint(f"  c: {c}\ni: {i}")
-                myprint("==============================")
+                myprint(f"[OOM] Skipping batch of shape {x.shape}")
                 skipped += 1
-                torch.cuda.empty_cache()  # 🔁 Clean up memory
+                torch.cuda.empty_cache()
                 continue
             else:
-                raise  # Re-raise other RuntimeErrors
-            
-        # Make embedding shingles same size
-        z = tops.force_length(
-            z,
-            1 if shinglen <= 0 else numshingles,
-            dim=1,
-            pad_mode="zeros",
-            cut_mode="start",
-        )
+                raise
+
+        z = tops.force_length(z, 1 if shinglen <= 0 else numshingles, dim=1, pad_mode="zeros", cut_mode="start")
         m = z.abs().max(-1)[0] < eps
-        # Append
+
         all_c.append(c)
         all_i.append(i)
         all_z.append(z)
         all_m.append(m)
-        # Limit number of queries/candidates?
-        if args.limit_num is not None and len(all_z) >= args.limit_num / args.ngpus:
-            myprint("")
-            myprint("  [Max num reached]")
-            break
-    # Concat single-song batches
-    all_c = torch.cat(all_c, dim=0)
-    all_i = torch.cat(all_i, dim=0)
-    all_z = torch.cat(all_z, dim=0)
-    all_m = torch.cat(all_m, dim=0)
+
+        if outpath is not None and (step + 1) % save_every == 0:
+            file_utils.save_to_hdf5(
+                outpath,
+                {
+                    "clique": torch.cat(all_c, dim=0),
+                    "index": torch.cat(all_i, dim=0),
+                    "z": torch.cat(all_z, dim=0),
+                    "m": torch.cat(all_m, dim=0),
+                },
+                batch_start=total_saved,
+            )
+            total_saved += all_z[0].shape[0] * len(all_z)
+            myprint(f"Saved checkpoint at batch {step + 1} → total {total_saved} samples")
+            all_c.clear()
+            all_i.clear()
+            all_z.clear()
+            all_m.clear()
+
+    # Final save
+    if outpath is not None and len(all_z) > 0:
+        file_utils.save_to_hdf5(
+            outpath,
+            {
+                "codes": torch.cat(all_c, dim=0),
+                "indices": torch.cat(all_i, dim=0),
+                "embeddings": torch.cat(all_z, dim=0),
+                "mask": torch.cat(all_m, dim=0),
+            },
+            batch_start=total_saved,
+        )
+        myprint(f"Saved final chunk → total {total_saved + all_z[0].shape[0] * len(all_z)} samples")
+
     myprint(f"Skipped {skipped} items.")
-    # Return
-    return all_c, all_i, all_z, all_m
 
 
 ###############################################################################
@@ -199,8 +204,22 @@ def extract_embeddings(shingle_len, shingle_hop, desc="Embed", eps=1e-6):
 with torch.inference_mode():
 
     # Extract embeddings
+    if args.jobname is not None:
+        outpath = os.path.join(log_path, f"{args.jobname}.pt")
+        outpath2 = os.path.join(log_path, f"{args.jobname}2.pt")
+    else:
+        outpath, outpath2 = None
+    
+    expected_len = len(dloader)
+    if outpath is not None and file_utils.has_extracted_on_disk(outpath, expected_len):
+        query_c, query_i, query_z, query_m = file_utils.load_from_hdf5(outpath)
+    else:
+        query_c, query_i, query_z, query_m = extract_embeddings(
+            args.qslen, args.qshop, desc="Query emb", outpath=outpath
+        )
+        
     query_c, query_i, query_z, query_m = extract_embeddings(
-        args.qslen, args.qshop, desc="Query emb"
+        args.qslen, args.qshop, desc="Query emb", outpath=outpath
     )
     query_c = query_c.int()
     query_i = query_i.int()
@@ -214,9 +233,12 @@ with torch.inference_mode():
             query_m.clone(),
         )
     else:
-        cand_c, cand_i, cand_z, cand_m = extract_embeddings(
-            args.cslen, args.cshop, desc="Cand emb"
-        )
+        if outpath is not None and file_utils.has_extracted_on_disk(outpath2, expected_len):
+            cand_c, cand_i, cand_z, cand_m = file_utils.load_from_hdf5(outpath2)
+        else:
+            query_c, query_i, cand_z, cand_m = extract_embeddings(
+                args.qslen, args.qshop, desc="Query emb", outpath=outpath2
+            )
         cand_c = cand_c.int()
         cand_i = cand_i.int()
         cand_z = cand_z.half()

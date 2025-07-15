@@ -1,6 +1,9 @@
+import os
 import sys
 import csv
 import json
+import h5py
+import torch
 
 
 def load_txt(fn):
@@ -51,3 +54,47 @@ def load_jsons(fn, limit_lines=None):
             if limit_lines is not None and len(d) == limit_lines:
                 break
     return d
+
+def save_to_hdf5(file_path, data_dict, dataset_dims=None, batch_start=None):
+    """
+    Appends or initializes datasets in an HDF5 file.
+    """
+    with h5py.File(file_path, "a") as f:
+        for key, value in data_dict.items():
+            arr = value.detach().cpu().numpy()
+            if key not in f:
+                maxshape = list(arr.shape)
+                if dataset_dims and key in dataset_dims:
+                    maxshape[0] = dataset_dims[key][0]  # override first dim with max
+                else:
+                    maxshape[0] = None  # unlimited first dimension
+                f.create_dataset(
+                    key, data=arr, maxshape=tuple(maxshape), chunks=True
+                )
+            else:
+                dset = f[key]
+                if batch_start is None:
+                    batch_start = dset.shape[0]
+                new_size = batch_start + arr.shape[0]
+                dset.resize((new_size,) + dset.shape[1:])
+                dset[batch_start:new_size] = arr
+
+def load_from_hdf5(file_path):
+    with h5py.File(file_path, "r") as f:
+        query_c = torch.from_numpy(f["clique"][:])
+        query_i = torch.from_numpy(f["index"][:])
+        query_z = torch.from_numpy(f["z"][:])
+        query_m = torch.from_numpy(f["m"][:])
+    return query_c, query_i, query_z, query_m
+        
+def has_extracted_on_disk(path, expected_length):
+    if not os.path.exists(path):
+        return False
+    try:
+        with h5py.File(path, "r") as f:
+            if "z" not in f:
+                return False
+            return len(f["z"]) == expected_length
+    except Exception as e:
+        print(f"Error checking file {path}: {e}")
+        return False
