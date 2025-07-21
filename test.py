@@ -158,10 +158,17 @@ def extract_embeddings(shingle_len, shingle_hop, desc="Embed", eps=1e-6, outpath
         z = tops.force_length(z, 1 if shinglen <= 0 else numshingles, dim=1, pad_mode="zeros", cut_mode="start")
         m = z.abs().max(-1)[0] < eps
 
-        all_c.append(c)
-        all_i.append(i)
+        z = z.cpu().half()
+        m = m.cpu()
+        c = c.cpu()
+        i = i.cpu()
+
         all_z.append(z)
         all_m.append(m)
+        all_c.append(c)
+        all_i.append(i)
+
+        torch.cuda.empty_cache()
 
         if outpath is not None and (step + 1) % save_every == 0:
             file_utils.save_to_hdf5(
@@ -206,14 +213,14 @@ with torch.inference_mode():
 
     # Extract embeddings
     if args.jobname is not None:
-        test_subset = args.jobname.split(".")[0].split("-")[-1]
+        test_subset = args.jobname.split("-")[1]
         outpath = os.path.join(log_path, f"test_{test_subset}.h5py")
         outpath2 = os.path.join(log_path, f"test_{test_subset}2.h5py")
     else:
         outpath, outpath2 = None
     
     expected_len = len(dloader)
-    if outpath is None or not file_utils.has_extracted_on_disk(outpath, expected_len):
+    if outpath is None or not os.path.isfile(outpath):
         extract_embeddings(
             args.qslen, args.qshop, desc="Query emb", outpath=outpath
         )
@@ -232,7 +239,7 @@ with torch.inference_mode():
             query_m.clone(),
         )
     else:
-        if outpath is None or not file_utils.has_extracted_on_disk(outpath2, expected_len):
+        if outpath is None or not os.path.isfile(outpath):
             query_c, query_i, cand_z, cand_m = extract_embeddings(
                 args.qslen, args.qshop, desc="Query emb", outpath=outpath2
             )
@@ -244,10 +251,10 @@ with torch.inference_mode():
 
     # Collect candidates from all GPUs + collapse to batch dim
     fabric.barrier()
-    cand_c = fabric.all_gather(cand_c)
-    cand_i = fabric.all_gather(cand_i)
-    cand_z = fabric.all_gather(cand_z)
-    cand_m = fabric.all_gather(cand_m)
+    cand_c = fabric.all_gather(cand_c).to(query_c.device)
+    cand_i = fabric.all_gather(cand_i).to(query_i.device)
+    cand_z = fabric.all_gather(cand_z).to(query_z.device)
+    cand_m = fabric.all_gather(cand_m).to(query_m.device)
     cand_c = torch.cat(torch.unbind(cand_c, dim=0), dim=0)
     cand_i = torch.cat(torch.unbind(cand_i, dim=0), dim=0)
     cand_z = torch.cat(torch.unbind(cand_z, dim=0), dim=0)
