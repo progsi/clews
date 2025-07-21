@@ -259,7 +259,10 @@ with torch.inference_mode():
     aps = []
     r1s = []
     rpcs = []
-    for n in myprogbar(range(len(query_z)), desc="Retrieve", leave=True):
+    my_queries = range(fabric.global_rank, len(query_z), fabric.world_size)
+    myprint(f"[GPU {fabric.global_rank}] running {len(my_queries)} queries")
+    for n in myprogbar(my_queries, desc=f"Retrieve (GPU {fabric.global_rank})", leave=True):
+    # for n in myprogbar(range(len(query_z)), desc="Retrieve", leave=True):
         ap, r1, rpc = eval.compute(
             model,
             query_c[n : n + 1],
