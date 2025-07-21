@@ -246,10 +246,10 @@ with torch.inference_mode():
 
     # Collect candidates from all GPUs + collapse to batch dim
     fabric.barrier()
-    cand_c = fabric.all_gather(cand_c)
-    cand_i = fabric.all_gather(cand_i)
-    cand_z = fabric.all_gather(cand_z)
-    cand_m = fabric.all_gather(cand_m)
+    cand_c = fabric.all_gather(cand_c).to(device=query_c.device)
+    cand_i = fabric.all_gather(cand_i).to(device=query_c.device)
+    cand_z = fabric.all_gather(cand_z).to(device=query_c.device)
+    cand_m = fabric.all_gather(cand_m).to(device=query_c.device)
     cand_c = torch.cat(torch.unbind(cand_c, dim=0), dim=0)
     cand_i = torch.cat(torch.unbind(cand_i, dim=0), dim=0)
     cand_z = torch.cat(torch.unbind(cand_z, dim=0), dim=0)
