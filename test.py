@@ -208,14 +208,14 @@ with torch.inference_mode():
 
     # Extract embeddings
     if args.jobname is not None:
-        test_subset = args.jobname.split(".")[0].split("-")[-1]
+        test_subset = args.jobname.split("-")[1]
         outpath = os.path.join(log_path, f"test_{test_subset}.h5py")
         outpath2 = os.path.join(log_path, f"test_{test_subset}2.h5py")
     else:
         outpath, outpath2 = None
     
     expected_len = len(dloader)
-    if outpath is None or not file_utils.has_extracted_on_disk(outpath, expected_len):
+    if outpath is None or not os.path.isfile(outpath):
         extract_embeddings(
             args.qslen, args.qshop, desc="Query emb", outpath=outpath
         )
@@ -234,7 +234,7 @@ with torch.inference_mode():
             query_m.clone(),
         )
     else:
-        if outpath is None or not file_utils.has_extracted_on_disk(outpath2, expected_len):
+        if outpath is None or not os.path.isfile(outpath2):
             query_c, query_i, cand_z, cand_m = extract_embeddings(
                 args.qslen, args.qshop, desc="Query emb", outpath=outpath2
             )

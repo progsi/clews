@@ -58,6 +58,10 @@ def compute(
         aps.append(average_precision(dist, match_clique))
         r1s.append(rank_of_first_correct(dist, match_clique))
         rpcs.append(rank_percentile(dist, match_clique))
+        
+        del dist
+        torch.cuda.empty_cache()  
+        
     # Return as vector
     aps = torch.stack(aps)
     r1s = torch.stack(r1s)
