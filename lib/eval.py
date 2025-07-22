@@ -27,10 +27,10 @@ def compute(
         # Compute distance between query and everything
         if batch_size_candidates is None or batch_size_candidates >= len(candidates_i):
             dist = model.distances(
-                queries_z[n : n + 1].float(),
-                candidates_z.float(),
-                qmask=queries_m[n : n + 1] if queries_m is not None else None,
-                cmask=candidates_m,
+                queries_z[n : n + 1].float().to("cuda"),
+                candidates_z.float().to("cuda"),
+                qmask=queries_m[n : n + 1].to("cuda") if queries_m is not None else None,
+                cmask=candidates_m.to("cuda"),
                 redux_strategy=redux_strategy,
             ).squeeze(0)
         else:

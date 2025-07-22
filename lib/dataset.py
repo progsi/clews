@@ -32,7 +32,7 @@ class Dataset(torch.utils.data.Dataset):
         self.p_samesong = conf.p_samesong
         self.verbose = verbose
         # Load metadata
-        print("Loading metadata...")
+        print(f"Loading metadata from {conf.path.meta}...")
         self.info, splitdict = torch.load(conf.path.meta)
         if LIMIT_CLIQUES is None:
             self.clique = splitdict[split]
@@ -48,7 +48,6 @@ class Dataset(torch.utils.data.Dataset):
         # Update filename with audio_path
         prefix = conf.path.audio.rstrip(os.sep) + os.sep   # guarantees exactly one final /
         for ver in tqdm(self.info.values(), desc="Updating filenames...", total=len(self.info)):
-            # 3) very fast string concatenation
             ver["filename"] = prefix + ver["filename"]
             
         # Checks
