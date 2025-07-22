@@ -174,28 +174,6 @@ def get_state(model, optim, sched, conf, epoch, lr, cost_best):
         cost_best=cost_best,
     )
 
-def chunked_all_gather(tensor, fabric, dim=0, chunk_size=1024):
-    chunks = torch.split(tensor, chunk_size, dim=dim)
-    gathered_chunks = []
-    for chunk in tqdm(chunks, total=len(chunks), desc="Gathering chunks"):
-        fabric.barrier()
-        gathered = fabric.all_gather(chunk)
-        gathered = torch.cat(torch.unbind(gathered, dim=0), dim=0)
-        gathered_chunks.append(gathered)
-        torch.cuda.empty_cache()
-    return torch.cat(gathered_chunks, dim=dim)
-
-def safe_all_gather(tensor, fabric):
-    # Example usage around suspicious code:
-    try:
-        # Try GPU gather first
-        return torch.cat(torch.unbind(fabric.all_gather(tensor), dim=0), dim=0)
-    except RuntimeError as e:
-        print(f"[Rank {fabric.global_rank}] GPU all_gather failed: {e}")
-        print("Trying chunked gather as fallback...")
-        torch.cuda.empty_cache()
-
-        return chunked_all_gather(tensor, fabric, dim=0, chunk_size=8192)
     
 ###################################################################################################
 

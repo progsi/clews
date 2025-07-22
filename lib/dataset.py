@@ -6,7 +6,7 @@ from tqdm import tqdm
 from utils import audio_utils
 from lib import tensor_ops as tops
 
-LIMIT_CLIQUES = None
+LIMIT_CLIQUES = 100
 
 
 class Dataset(torch.utils.data.Dataset):

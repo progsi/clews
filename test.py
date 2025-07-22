@@ -122,22 +122,22 @@ dloader = fabric.setup_dataloaders(dloader)
 
 ###############################################################################
 
-
 @torch.inference_mode()
-def extract_embeddings(shingle_len, shingle_hop, desc="Embed", eps=1e-6, outpath=None, save_every=1000):
+def extract_embeddings(shingle_len, shingle_hop, outpath, eps=1e-6, save_every=1000):
     shinglen, shinghop = model.get_shingle_params()
     if shingle_len is not None:
         shinglen = shingle_len
     if shingle_hop is not None:
         shinghop = shingle_hop
+
     mxlen = int(args.maxlen * model.sr)
     numshingles = int((mxlen - int(shinglen * model.sr)) / int(shinghop * model.sr))
 
     skipped = 0
-    all_c, all_i, all_z, all_m = [], [], [], []
     total_saved = 0
+    buffer = {"clique": [], "index": [], "z": [], "m": []}
 
-    for step, batch in enumerate(myprogbar(dloader, desc=desc, leave=True)):
+    for step, batch in enumerate(myprogbar(dloader, desc="Extracting embeddings...", leave=True)):
         c, i, x = batch[:3]
         if x.size(1) > mxlen:
             x = x[:, :mxlen]
@@ -160,44 +160,35 @@ def extract_embeddings(shingle_len, shingle_hop, desc="Embed", eps=1e-6, outpath
         z = tops.force_length(z, 1 if shinglen <= 0 else numshingles, dim=1, pad_mode="zeros", cut_mode="start")
         m = z.abs().max(-1)[0] < eps
 
-        all_c.append(c)
-        all_i.append(i)
-        all_z.append(z)
-        all_m.append(m)
+        # Move to CPU immediately
+        buffer["clique"].append(c.cpu())
+        buffer["index"].append(i.cpu())
+        buffer["z"].append(z.cpu())
+        buffer["m"].append(m.cpu())
 
-        if outpath is not None and (step + 1) % save_every == 0:
+        # Save if needed
+        if outpath is not None and ((step + 1) % save_every == 0 or (step + 1) == len(dloader)):
             file_utils.save_to_hdf5(
                 outpath,
                 {
-                    "clique": torch.cat(all_c, dim=0),
-                    "index": torch.cat(all_i, dim=0),
-                    "z": torch.cat(all_z, dim=0),
-                    "m": torch.cat(all_m, dim=0),
+                    "clique": torch.cat(buffer["clique"], dim=0),
+                    "index": torch.cat(buffer["index"], dim=0),
+                    "z": torch.cat(buffer["z"], dim=0),
+                    "m": torch.cat(buffer["m"], dim=0),
                 },
                 batch_start=total_saved,
             )
-            total_saved += all_z[0].shape[0] * len(all_z)
+            batch_size = buffer["z"][0].shape[0] * len(buffer["z"])
+            total_saved += batch_size
             myprint(f"Saved checkpoint at batch {step + 1} → total {total_saved} samples")
-            all_c.clear()
-            all_i.clear()
-            all_z.clear()
-            all_m.clear()
 
-    # Final save
-    if outpath is not None and len(all_z) > 0:
-        file_utils.save_to_hdf5(
-            outpath,
-            {
-                "clique": torch.cat(all_c, dim=0),
-                "index": torch.cat(all_i, dim=0),
-                "z": torch.cat(all_z, dim=0),
-                "m": torch.cat(all_m, dim=0),
-            },
-            batch_start=total_saved,
-        )
-        myprint(f"Saved final chunk → total {total_saved + all_z[0].shape[0] * len(all_z)} samples")
+            # Clear buffer and memory
+            for k in buffer:
+                buffer[k].clear()
+            torch.cuda.empty_cache()
 
     myprint(f"Skipped {skipped} items.")
+
     
 
 
@@ -217,7 +208,7 @@ with torch.inference_mode():
     expected_len = len(dloader)
     if outpath is None or not os.path.isfile(outpath):
         extract_embeddings(
-            args.qslen, args.qshop, desc="Query emb", outpath=outpath
+            args.qslen, args.qshop, outpath=outpath
         )
         
     query_c, query_i, query_z, query_m = file_utils.load_from_hdf5(outpath)
@@ -236,8 +227,8 @@ with torch.inference_mode():
         )
     else:
         if outpath is None or not os.path.isfile(outpath2):
-            query_c, query_i, cand_z, cand_m = extract_embeddings(
-                args.qslen, args.qshop, desc="Query emb", outpath=outpath2
+            extract_embeddings(
+                args.qslen, args.qshop, outpath=outpath2
             )
         cand_c, cand_i, cand_z, cand_m = file_utils.load_from_hdf5(outpath2)
         print(f"Having candidate embeddings of shape: {cand_z.shape}")
@@ -298,6 +289,7 @@ with torch.inference_mode():
 
 # Print
 logdict_mean = {
+    "n": len(aps),
     "MAP": aps.mean(),
     "MR1": r1s.mean(),
     "ARP": rpcs.mean(),

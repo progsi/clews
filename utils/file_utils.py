@@ -87,14 +87,3 @@ def load_from_hdf5(file_path):
         query_m = torch.from_numpy(f["m"][:])
     return query_c, query_i, query_z, query_m
         
-def has_extracted_on_disk(path, expected_length):
-    if not os.path.exists(path):
-        return False
-    try:
-        with h5py.File(path, "r") as f:
-            if "z" not in f:
-                return False
-            return len(f["z"]) == expected_length
-    except Exception as e:
-        print(f"Error checking file {path}: {e}")
-        return False
