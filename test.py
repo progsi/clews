@@ -51,6 +51,7 @@ torch.backends.cudnn.benchmark = False
 torch.backends.cudnn.deterministic = False
 torch.set_float32_matmul_precision("medium")
 torch.autograd.set_detect_anomaly(False)
+print(f"Initializing Fabric with {args.ngpus} GPUs and {args.nnodes} nodes...")
 fabric = Fabric(
     accelerator="cuda",
     devices=args.ngpus,
