@@ -49,9 +49,9 @@ def compute(
                 dist.append(ddd)
             dist = torch.cat(dist, dim=-1)
         # Get ground truth
-        match_clique = candidates_c == queries_c[n]
+        match_clique = (candidates_c == queries_c[n]).to(dist.device)
         # Remove query from candidates if present
-        match_query = candidates_i == queries_i[n]
+        match_query = (candidates_i == queries_i[n]).to(dist.device)
         dist = torch.where(match_query, torch.inf, dist)
         match_clique = torch.where(match_query, False, match_clique)
         # Compute AP and R1
