@@ -201,6 +201,18 @@ def extract_embeddings(shingle_len, shingle_hop, desc="Embed", eps=1e-6, outpath
     
 
 def safe_all_gather(tensor, fabric):
+    def print_gpu_memory(prefix=""):
+        print(f"{prefix} GPU Memory Summary:")
+        print(f"  Allocated: {torch.cuda.memory_allocated() / 1024**2:.2f} MB")
+        print(f"  Reserved:  {torch.cuda.memory_reserved() / 1024**2:.2f} MB")
+        print(f"  Max Allocated (since start): {torch.cuda.max_memory_allocated() / 1024**2:.2f} MB")
+        print(f"  Max Reserved (since start):  {torch.cuda.max_memory_reserved() / 1024**2:.2f} MB")
+        print(f"  Cached:    {torch.cuda.memory_cached() / 1024**2 if hasattr(torch.cuda, 'memory_cached') else 'N/A'} MB")
+        print("")
+
+    # Example usage around suspicious code:
+
+    print_gpu_memory("Before gathering tensors")
     try:
         # Try GPU gather first
         return torch.cat(torch.unbind(fabric.all_gather(tensor), dim=0), dim=0)
