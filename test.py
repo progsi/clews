@@ -7,6 +7,7 @@ from torch.utils.data.distributed import DistributedSampler
 
 from lightning import Fabric
 from lightning.fabric.strategies import DDPStrategy
+from lightning.fabric.plugins.collectives.collective import all_gather_object
 
 from lib import eval, dataset
 from lib import tensor_ops as tops
@@ -199,32 +200,6 @@ def extract_embeddings(shingle_len, shingle_hop, desc="Embed", eps=1e-6, outpath
 
     myprint(f"Skipped {skipped} items.")
     
-
-def safe_all_gather(tensor, fabric):
-    def print_gpu_memory(prefix=""):
-        print(f"{prefix} GPU Memory Summary:")
-        print(f"  Allocated: {torch.cuda.memory_allocated() / 1024**2:.2f} MB")
-        print(f"  Reserved:  {torch.cuda.memory_reserved() / 1024**2:.2f} MB")
-        print(f"  Max Allocated (since start): {torch.cuda.max_memory_allocated() / 1024**2:.2f} MB")
-        print(f"  Max Reserved (since start):  {torch.cuda.max_memory_reserved() / 1024**2:.2f} MB")
-        print(f"  Cached:    {torch.cuda.memory_cached() / 1024**2 if hasattr(torch.cuda, 'memory_cached') else 'N/A'} MB")
-        print("")
-
-    # Example usage around suspicious code:
-
-    print_gpu_memory("Before gathering tensors")
-    try:
-        # Try GPU gather first
-        return torch.cat(torch.unbind(fabric.all_gather(tensor), dim=0), dim=0)
-    except RuntimeError as e:
-        print(f"[Rank {fabric.global_rank}] GPU all_gather failed: {e}")
-        torch.cuda.empty_cache()
-
-        # Move to CPU and try again using object gather
-        tensor_cpu = tensor.cpu()
-        gathered = fabric.all_gather_object(tensor_cpu)
-        return torch.cat(gathered, dim=0).to(tensor.device)
-    
     
 ###############################################################################
 
@@ -271,10 +246,10 @@ with torch.inference_mode():
 
     # Collect candidates from all GPUs + collapse to batch dim
     fabric.barrier()
-    cand_c = safe_all_gather(cand_c, fabric)
-    cand_i = safe_all_gather(cand_i, fabric)
-    cand_z = safe_all_gather(cand_z, fabric)
-    cand_m = safe_all_gather(cand_m, fabric)
+    cand_c = pytorch_utils.safe_all_gather(cand_c, fabric)
+    cand_i = pytorch_utils.safe_all_gather(cand_i, fabric)
+    cand_z = pytorch_utils.safe_all_gather(cand_z, fabric)
+    cand_m = pytorch_utils.safe_all_gather(cand_m, fabric)
     cand_c = torch.cat(torch.unbind(cand_c, dim=0), dim=0)
     cand_i = torch.cat(torch.unbind(cand_i, dim=0), dim=0)
     cand_z = torch.cat(torch.unbind(cand_z, dim=0), dim=0)
