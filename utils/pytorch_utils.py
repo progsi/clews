@@ -1,4 +1,5 @@
 import sys
+from tqdm import tqdm
 import torch
 from lightning.fabric.utilities import AttributeDict
 from lightning.fabric.loggers import TensorBoardLogger
@@ -176,7 +177,7 @@ def get_state(model, optim, sched, conf, epoch, lr, cost_best):
 def chunked_all_gather(tensor, fabric, dim=0, chunk_size=1024):
     chunks = torch.split(tensor, chunk_size, dim=dim)
     gathered_chunks = []
-    for chunk in chunks:
+    for chunk in tqdm(chunks, total=len(chunks), desc="Gathering chunks"):
         fabric.barrier()
         gathered = fabric.all_gather(chunk)
         gathered = torch.cat(torch.unbind(gathered, dim=0), dim=0)
@@ -185,16 +186,7 @@ def chunked_all_gather(tensor, fabric, dim=0, chunk_size=1024):
     return torch.cat(gathered_chunks, dim=dim)
 
 def safe_all_gather(tensor, fabric):
-    def print_gpu_memory(prefix=""):
-        print(f"{prefix} GPU Memory Summary:")
-        print(f"  Allocated: {torch.cuda.memory_allocated() / 1024**2:.2f} MB")
-        print(f"  Reserved:  {torch.cuda.memory_reserved() / 1024**2:.2f} MB")
-        print(f"  Max Allocated (since start): {torch.cuda.max_memory_allocated() / 1024**2:.2f} MB")
-        print(f"  Max Reserved (since start):  {torch.cuda.max_memory_reserved() / 1024**2:.2f} MB")
-        print(f"  Cached:    {torch.cuda.memory_cached() / 1024**2 if hasattr(torch.cuda, 'memory_cached') else 'N/A'} MB")
-        print("")
     # Example usage around suspicious code:
-    print_gpu_memory("Before gathering tensors")
     try:
         # Try GPU gather first
         return torch.cat(torch.unbind(fabric.all_gather(tensor), dim=0), dim=0)
@@ -203,7 +195,7 @@ def safe_all_gather(tensor, fabric):
         print("Trying chunked gather as fallback...")
         torch.cuda.empty_cache()
 
-        return chunked_all_gather(tensor, fabric, dim=0, chunk_size=32_000)
+        return chunked_all_gather(tensor, fabric, dim=0, chunk_size=8192)
     
 ###################################################################################################
 

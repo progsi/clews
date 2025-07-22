@@ -66,8 +66,8 @@ rm -rf logs/dvi2fm_light-clews/ ; mkdir logs/dvi2fm_light-clews/ ; cp config/dvi
 Next, launch the training script using, for instance:
 
 ```bash
-python train.py jobname=dvi2-clews conf=config/dvi2-clews.yaml fabric.nnodes=1 fabric.ngpus=2
-python train.py jobname=dvi2fm_light-clews conf=config/dvi2fm_light-clews.yaml fabric.nnodes=1 fabric.ngpus=2
+python train.py jobname=dvi2-clews conf=config/dvi2-clews.yaml nnodes=1 ngpus=2
+python train.py jobname=dvi2fm_light-clews conf=config/dvi2fm_light-clews.yaml nnodes=1 ngpus=2
 ```
 
 ### Testing
