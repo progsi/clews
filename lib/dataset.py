@@ -1,6 +1,7 @@
 import sys
 import os
 import torch
+from tqdm import tqdm
 
 from utils import audio_utils
 from lib import tensor_ops as tops
@@ -31,6 +32,7 @@ class Dataset(torch.utils.data.Dataset):
         self.p_samesong = conf.p_samesong
         self.verbose = verbose
         # Load metadata
+        print("Loading metadata...")
         self.info, splitdict = torch.load(conf.path.meta)
         if LIMIT_CLIQUES is None:
             self.clique = splitdict[split]
@@ -42,13 +44,16 @@ class Dataset(torch.utils.data.Dataset):
                 self.clique[key] = item
                 if len(self.clique) == LIMIT_CLIQUES:
                     break
+
         # Update filename with audio_path
-        for ver in self.info.keys():
-            self.info[ver]["filename"] = os.path.join(
-                conf.path.audio, self.info[ver]["filename"]
-            )
+        prefix = conf.path.audio.rstrip(os.sep) + os.sep   # guarantees exactly one final /
+        for ver in tqdm(self.info.values(), desc="Updating filenames...", total=len(self.info)):
+            # 3) very fast string concatenation
+            ver["filename"] = prefix + ver["filename"]
+            
         # Checks
         if checks:
+            print("Performing checks...")
             self.perform_checks(splitdict, split)
         # Get clique id
         self.clique2id = {}
