@@ -51,7 +51,6 @@ torch.backends.cudnn.benchmark = False
 torch.backends.cudnn.deterministic = False
 torch.set_float32_matmul_precision("medium")
 torch.autograd.set_detect_anomaly(False)
-print(f"Initializing Fabric with {args.ngpus} GPUs and {args.nnodes} nodes...")
 fabric = Fabric(
     accelerator="cuda",
     devices=args.ngpus,
@@ -200,7 +199,8 @@ def extract_embeddings(shingle_len, shingle_hop, desc="Embed", eps=1e-6, outpath
 
     myprint(f"Skipped {skipped} items.")
     
-    
+
+
 ###############################################################################
 
 # Let's go
@@ -221,6 +221,7 @@ with torch.inference_mode():
         )
         
     query_c, query_i, query_z, query_m = file_utils.load_from_hdf5(outpath)
+    print(f"Having query embeddings of shape: {query_z.shape}")
         
     query_c = query_c.int()
     query_i = query_i.int()
@@ -239,17 +240,18 @@ with torch.inference_mode():
                 args.qslen, args.qshop, desc="Query emb", outpath=outpath2
             )
         cand_c, cand_i, cand_z, cand_m = file_utils.load_from_hdf5(outpath2)
-        
+        print(f"Having candidate embeddings of shape: {cand_z.shape}")
+
         cand_c = cand_c.int()
         cand_i = cand_i.int()
         cand_z = cand_z.half()
 
     # Collect candidates from all GPUs + collapse to batch dim
     fabric.barrier()
-    cand_c = pytorch_utils.safe_all_gather(cand_c, fabric)
-    cand_i = pytorch_utils.safe_all_gather(cand_i, fabric)
-    cand_z = pytorch_utils.safe_all_gather(cand_z, fabric)
-    cand_m = pytorch_utils.safe_all_gather(cand_m, fabric)
+    cand_c = fabric.all_gather(cand_c).to(device=query_c.device)
+    cand_i = fabric.all_gather(cand_i).to(device=query_c.device)
+    cand_z = fabric.all_gather(cand_z).to(device=query_c.device)
+    cand_m = fabric.all_gather(cand_m).to(device=query_c.device)
     cand_c = torch.cat(torch.unbind(cand_c, dim=0), dim=0)
     cand_i = torch.cat(torch.unbind(cand_i, dim=0), dim=0)
     cand_z = torch.cat(torch.unbind(cand_z, dim=0), dim=0)
