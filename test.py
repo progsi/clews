@@ -7,7 +7,6 @@ from torch.utils.data.distributed import DistributedSampler
 
 from lightning import Fabric
 from lightning.fabric.strategies import DDPStrategy
-from lightning.fabric.plugins.collectives.collective import all_gather_object
 
 from lib import eval, dataset
 from lib import tensor_ops as tops
