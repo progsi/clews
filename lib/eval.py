@@ -1,8 +1,71 @@
 import sys
 import torch
 
+from utils.file_utils import load_from_h5_by_index, load_from_h5_by_indices
+
 ###################################################################################################
 
+
+@torch.inference_mode()
+def compute_from_disk(
+    model,
+    h5_path_q,
+    index_q,
+    total_c,
+    redux_strategy=None,
+    h5_path_c=None,
+    batch_size_c=1024,
+):
+    """
+    Compute retrieval metrics (AP, R@1, RPC) for a single query at index_q against all candidates,
+    loading candidates from disk in batches (to avoid OOM).
+    """
+
+    # Load single query
+    query_z, query_m, query_i, query_c = load_from_h5_by_index(h5_path_q, index_q)
+    # query_c = query_c.int()
+    # query_i = query_i.int()
+    # query_z = query_z.half()
+
+    # Default to self-retrieval if no candidate path is provided
+    candidate_path = h5_path_c or h5_path_q
+
+    dist_list = []
+    match_clique_all = []
+
+    model.eval()
+
+    for start in range(0, total_c, batch_size_c):
+        end = min(start + batch_size_c, total_c)
+
+        cand_z, cand_m, cand_i, cand_c = load_from_h5_by_indices(candidate_path, start, end)
+        # cand_c = cand_c.int()
+        # cand_i = cand_i.int()
+        # cand_z = cand_z.half()
+
+        dists = model.distances(
+            query_z,
+            cand_z,
+            qmask=query_m,
+            cmask=cand_m,
+            redux_strategy=redux_strategy,
+        ).squeeze(0)  # shape: (batch_size,)
+
+        match_clique = (cand_c == query_c.item())  # shape: (batch_size,)
+        match_query = (cand_i == query_i.item())   # shape: (batch_size,)
+
+        dist_list.append(torch.where(match_query, torch.inf, dists))
+        match_clique_all.append(torch.where(match_query, False, match_clique))
+
+    dist = torch.cat(dist_list, dim=0)
+    match_clique = torch.cat(match_clique_all, dim=0)
+
+    # Compute metrics
+    ap = average_precision(dist, match_clique)
+    r1 = rank_of_first_correct(dist, match_clique)
+    rpc = rank_percentile(dist, match_clique)
+
+    return ap.unsqueeze(0), r1.unsqueeze(0), rpc.unsqueeze(0)
 
 @torch.inference_mode()
 def compute(
@@ -17,6 +80,7 @@ def compute(
     candidates_m=None,
     redux_strategy=None,
     batch_size_candidates=None,
+    device="cuda",
 ):
     # Prepare
     aps = []
@@ -27,22 +91,22 @@ def compute(
         # Compute distance between query and everything
         if batch_size_candidates is None or batch_size_candidates >= len(candidates_i):
             dist = model.distances(
-                queries_z[n : n + 1].float().to("cuda"),
-                candidates_z.float().to("cuda"),
-                qmask=queries_m[n : n + 1].to("cuda") if queries_m is not None else None,
-                cmask=candidates_m.to("cuda"),
-                redux_strategy=redux_strategy,
+                queries_z[n : n + 1].float().to(device),
+                candidates_z.float().to(device),
+                qmask=queries_m[n : n + 1].to(device) if queries_m is not None else None,
+                cmask=candidates_m.to(device),
+                redux_strategy=redux_strategy.to(device),
             ).squeeze(0)
         else:
             dist = []
             for mstart in range(0, len(candidates_i), batch_size_candidates):
                 mend = min(mstart + batch_size_candidates, len(candidates_i))
                 ddd = model.distances(
-                    queries_z[n : n + 1].float(),
-                    candidates_z[mstart:mend].float(),
-                    qmask=queries_m[n : n + 1] if queries_m is not None else None,
+                    queries_z[n : n + 1].float().to(device),
+                    candidates_z[mstart:mend].float().to(device),
+                    qmask=queries_m[n : n + 1].to(device) if queries_m is not None else None,
                     cmask=(
-                        candidates_m[mstart:mend] if candidates_m is not None else None
+                        candidates_m[mstart:mend].to(device) if candidates_m is not None else None
                     ),
                     redux_strategy=redux_strategy,
                 ).squeeze(0)
@@ -60,7 +124,7 @@ def compute(
         rpcs.append(rank_percentile(dist, match_clique))
         
         del dist
-        torch.cuda.empty_cache()  
+        # torch.cuda.empty_cache()  
         
     # Return as vector
     aps = torch.stack(aps)

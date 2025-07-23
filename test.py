@@ -190,34 +190,39 @@ def extract_embeddings(shingle_len, shingle_hop, outpath, eps=1e-6, save_every=1
     myprint(f"Skipped {skipped} items.")
 
     
-
-
 ###############################################################################
 
 # Let's go
 with torch.inference_mode():
 
+    need_seperate_candidates = not args.cslen == args.qslen or not args.cshop == args.qshop
     # Extract embeddings
     if args.jobname is not None:
         test_subset = args.jobname.split("-")[-1]
-        outpath = os.path.join(log_path, f"test_{test_subset}.h5py")
-        outpath2 = os.path.join(log_path, f"test_{test_subset}2.h5py")
+        h5path_q = os.path.join(log_path, f"test_{test_subset}.h5py")
+        if need_seperate_candidates:
+            h5path_c = os.path.join(log_path, f"test_{test_subset}2.h5py")
+        else:
+            h5path_c = None
     else:
-        outpath, outpath2 = None
+        h5path_q, h5path_c = None
     
     expected_len = len(dloader)
-    if outpath is None or not os.path.isfile(outpath):
+    if h5path_q is None or not os.path.isfile(h5path_q):
         extract_embeddings(
-            args.qslen, args.qshop, outpath=outpath
+            args.qslen, args.qshop, outpath=h5path_q
         )
         
-    query_c, query_i, query_z, query_m = file_utils.load_from_hdf5(outpath)
+    # NOTE: Removed to test "from_disk"         
+    query_c, query_i, query_z, query_m = file_utils.load_from_hdf5(h5path_q)
     print(f"Having query embeddings of shape: {query_z.shape}")
         
     query_c = query_c.int()
     query_i = query_i.int()
     query_z = query_z.half()
-    if args.cslen == args.qslen and args.cshop == args.qshop:
+    
+
+    if not need_seperate_candidates:
         myprint("Cand emb: (copy)")
         cand_c, cand_i, cand_z, cand_m = (
             query_c.clone(),
@@ -226,36 +231,79 @@ with torch.inference_mode():
             query_m.clone(),
         )
     else:
-        if outpath is None or not os.path.isfile(outpath2):
+    # if need_seperate_candidates:
+        if h5path_q is None or not os.path.isfile(h5path_c):
             extract_embeddings(
-                args.qslen, args.qshop, outpath=outpath2
+                args.qslen, args.qshop, outpath=h5path_c
             )
-        cand_c, cand_i, cand_z, cand_m = file_utils.load_from_hdf5(outpath2)
+        # NOTE: Removed to test "from_disk"
+        cand_c, cand_i, cand_z, cand_m = file_utils.load_from_hdf5(h5path_c)
         print(f"Having candidate embeddings of shape: {cand_z.shape}")
+        if not len(cand_i) == expected_len:
+            myprint(f"Warning: expected {expected_len} candidates, got {len(cand_i)}")
 
         cand_c = cand_c.int()
         cand_i = cand_i.int()
         cand_z = cand_z.half()
 
+    # # NOTE: trying out "from_disk"    
+    # total_q = file_utils.get_length_from_h5(h5path_q)
+    # total_c = file_utils.get_length_from_h5(h5path_c) if h5path_c else total_q
+        
+    # aps = []
+    # r1s = []
+    # rpcs = []
+    # my_queries = range(fabric.global_rank, total_q, fabric.world_size)
+    # myprint(f"[GPU {fabric.global_rank}] running {len(my_queries)} queries")
+    # # one n is one query
+    # for n in myprogbar(my_queries, desc=f"Retrieve (GPU {fabric.global_rank})", leave=True): 
+    # # for n in myprogbar(range(len(query_z)), desc="Retrieve", leave=True):
+    #     ap, r1, rpc = eval.compute_from_disk(
+    #             model=model,
+    #             h5_path_q=h5path_q,
+    #             index_q=n,
+    #             total_c=total_c,
+    #             redux_strategy=args.redux,
+    #             h5_path_c=h5path_c,
+    #             batch_size_c=2**10,
+    #     )
+    #     aps.append(ap)
+    #     r1s.append(r1)
+    #     rpcs.append(rpc)
+    # aps = torch.stack(aps)
+    # r1s = torch.stack(r1s)
+    # rpcs = torch.stack(rpcs)
+
+    # # Collect measures from all GPUs + collapse to batch dim
+    # fabric.barrier()
+    # aps = fabric.all_gather(aps)
+    # r1s = fabric.all_gather(r1s)
+    # rpcs = fabric.all_gather(rpcs)
+    # aps = torch.cat(torch.unbind(aps, dim=0), dim=0)
+    # r1s = torch.cat(torch.unbind(r1s, dim=0), dim=0)
+    # rpcs = torch.cat(torch.unbind(rpcs, dim=0), dim=0)
+    
+    # NOTE: Removed to test "from_disk"
     # Collect candidates from all GPUs + collapse to batch dim
-    fabric.barrier()
-    cand_c = fabric.all_gather(cand_c).to(device=query_c.device)
-    cand_i = fabric.all_gather(cand_i).to(device=query_c.device)
-    cand_z = fabric.all_gather(cand_z).to(device=query_c.device)
-    cand_m = fabric.all_gather(cand_m).to(device=query_c.device)
-    cand_c = torch.cat(torch.unbind(cand_c, dim=0), dim=0)
-    cand_i = torch.cat(torch.unbind(cand_i, dim=0), dim=0)
-    cand_z = torch.cat(torch.unbind(cand_z, dim=0), dim=0)
-    cand_m = torch.cat(torch.unbind(cand_m, dim=0), dim=0)
+    if fabric.world_size > 1:
+        fabric.barrier()
+        cand_c = fabric.all_gather(cand_c)
+        cand_i = fabric.all_gather(cand_i)
+        cand_z = fabric.all_gather(cand_z)
+        cand_m = fabric.all_gather(cand_m)
+        
+        cand_c = torch.cat(torch.unbind(cand_c, dim=0), dim=0)
+        cand_i = torch.cat(torch.unbind(cand_i, dim=0), dim=0)
+        cand_z = torch.cat(torch.unbind(cand_z, dim=0), dim=0)
+        cand_m = torch.cat(torch.unbind(cand_m, dim=0), dim=0)
 
     # Evaluate
     aps = []
     r1s = []
     rpcs = []
     my_queries = range(fabric.global_rank, len(query_z), fabric.world_size)
-    myprint(f"[GPU {fabric.global_rank}] running {len(my_queries)} queries")
+    batch_size_candidates = 2**15
     for n in myprogbar(my_queries, desc=f"Retrieve (GPU {fabric.global_rank})", leave=True):
-    # for n in myprogbar(range(len(query_z)), desc="Retrieve", leave=True):
         ap, r1, rpc = eval.compute(
             model,
             query_c[n : n + 1],
@@ -267,11 +315,8 @@ with torch.inference_mode():
             queries_m=query_m[n : n + 1],
             candidates_m=cand_m,
             redux_strategy=args.redux,
-            batch_size_candidates=2**15,
-        )
-        aps.append(ap)
-        r1s.append(r1)
-        rpcs.append(rpc)
+            batch_size_candidates=batch_size_candidates,
+    )
     aps = torch.stack(aps)
     r1s = torch.stack(r1s)
     rpcs = torch.stack(rpcs)
