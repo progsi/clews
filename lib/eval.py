@@ -15,6 +15,7 @@ def compute_from_disk(
     redux_strategy=None,
     h5_path_c=None,
     batch_size_c=1024,
+    device="cuda",
 ):
     """
     Compute retrieval metrics (AP, R@1, RPC) for a single query at index_q against all candidates,
@@ -44,10 +45,10 @@ def compute_from_disk(
         # cand_z = cand_z.half()
 
         dists = model.distances(
-            query_z,
-            cand_z,
-            qmask=query_m,
-            cmask=cand_m,
+            query_z.to(device),
+            cand_z.to(device),
+            qmask=query_m.to(device),
+            cmask=cand_m.to(device),
             redux_strategy=redux_strategy,
         ).squeeze(0)  # shape: (batch_size,)
 

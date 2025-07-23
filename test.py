@@ -213,7 +213,6 @@ with torch.inference_mode():
             args.qslen, args.qshop, outpath=h5path_q
         )
         
-    # NOTE: Removed to test "from_disk"         
     query_c, query_i, query_z, query_m = file_utils.load_from_hdf5(h5path_q)
     print(f"Having query embeddings of shape: {query_z.shape}")
         
@@ -231,12 +230,10 @@ with torch.inference_mode():
             query_m.clone(),
         )
     else:
-    # if need_seperate_candidates:
         if h5path_q is None or not os.path.isfile(h5path_c):
             extract_embeddings(
                 args.qslen, args.qshop, outpath=h5path_c
             )
-        # NOTE: Removed to test "from_disk"
         cand_c, cand_i, cand_z, cand_m = file_utils.load_from_hdf5(h5path_c)
         print(f"Having candidate embeddings of shape: {cand_z.shape}")
         if not len(cand_i) == expected_len:
@@ -245,57 +242,20 @@ with torch.inference_mode():
         cand_c = cand_c.int()
         cand_i = cand_i.int()
         cand_z = cand_z.half()
-
-    # # NOTE: trying out "from_disk"    
-    # total_q = file_utils.get_length_from_h5(h5path_q)
-    # total_c = file_utils.get_length_from_h5(h5path_c) if h5path_c else total_q
-        
-    # aps = []
-    # r1s = []
-    # rpcs = []
-    # my_queries = range(fabric.global_rank, total_q, fabric.world_size)
-    # myprint(f"[GPU {fabric.global_rank}] running {len(my_queries)} queries")
-    # # one n is one query
-    # for n in myprogbar(my_queries, desc=f"Retrieve (GPU {fabric.global_rank})", leave=True): 
-    # # for n in myprogbar(range(len(query_z)), desc="Retrieve", leave=True):
-    #     ap, r1, rpc = eval.compute_from_disk(
-    #             model=model,
-    #             h5_path_q=h5path_q,
-    #             index_q=n,
-    #             total_c=total_c,
-    #             redux_strategy=args.redux,
-    #             h5_path_c=h5path_c,
-    #             batch_size_c=2**10,
-    #     )
-    #     aps.append(ap)
-    #     r1s.append(r1)
-    #     rpcs.append(rpc)
-    # aps = torch.stack(aps)
-    # r1s = torch.stack(r1s)
-    # rpcs = torch.stack(rpcs)
-
-    # # Collect measures from all GPUs + collapse to batch dim
-    # fabric.barrier()
-    # aps = fabric.all_gather(aps)
-    # r1s = fabric.all_gather(r1s)
-    # rpcs = fabric.all_gather(rpcs)
-    # aps = torch.cat(torch.unbind(aps, dim=0), dim=0)
-    # r1s = torch.cat(torch.unbind(r1s, dim=0), dim=0)
-    # rpcs = torch.cat(torch.unbind(rpcs, dim=0), dim=0)
     
-    # NOTE: Removed to test "from_disk"
-    # Collect candidates from all GPUs + collapse to batch dim
-    if fabric.world_size > 1:
-        fabric.barrier()
-        cand_c = fabric.all_gather(cand_c)
-        cand_i = fabric.all_gather(cand_i)
-        cand_z = fabric.all_gather(cand_z)
-        cand_m = fabric.all_gather(cand_m)
+    # NOTE: I assume not needed anymore because of H5    
+    # # Collect candidates from all GPUs + collapse to batch dim
+    # if fabric.world_size > 1:
+    #     fabric.barrier()
+    #     cand_c = fabric.all_gather(cand_c)
+    #     cand_i = fabric.all_gather(cand_i)
+    #     cand_z = fabric.all_gather(cand_z)
+    #     cand_m = fabric.all_gather(cand_m)
         
-        cand_c = torch.cat(torch.unbind(cand_c, dim=0), dim=0)
-        cand_i = torch.cat(torch.unbind(cand_i, dim=0), dim=0)
-        cand_z = torch.cat(torch.unbind(cand_z, dim=0), dim=0)
-        cand_m = torch.cat(torch.unbind(cand_m, dim=0), dim=0)
+    #     cand_c = torch.cat(torch.unbind(cand_c, dim=0), dim=0)
+    #     cand_i = torch.cat(torch.unbind(cand_i, dim=0), dim=0)
+    #     cand_z = torch.cat(torch.unbind(cand_z, dim=0), dim=0)
+    #     cand_m = torch.cat(torch.unbind(cand_m, dim=0), dim=0)
 
     # Evaluate
     aps = []
