@@ -38,6 +38,7 @@ def report(
     ncols=120,
     fmt=None,
     fmt_default={
+        "N": "d",
         "loss": ".3f",
         "l_main": ".3f",
         "MAP": "5.3f",

@@ -298,7 +298,7 @@ with torch.inference_mode():
 
 # Print
 logdict_mean = {
-    "N": int(len(aps)),
+    "N": len(aps),
     "MAP": aps.mean(),
     "MR1": r1s.mean(),
     "ARP": rpcs.mean(),
