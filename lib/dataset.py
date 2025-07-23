@@ -6,7 +6,7 @@ from tqdm import tqdm
 from utils import audio_utils
 from lib import tensor_ops as tops
 
-LIMIT_CLIQUES = None
+LIMIT_CLIQUES = 100
 
 
 class Dataset(torch.utils.data.Dataset):
@@ -126,6 +126,11 @@ class Dataset(torch.utils.data.Dataset):
 
     ###########################################################################
 
+    def get_indices(self, cliques=None):
+        return [
+            self.info[v]["id"] for v in self.versions if cliques is None or self.info[v]["clique"] in cliques
+        ]
+        
     def get_audio(self, fn, start=0, length=None):
         start = int(start * self.samplerate)
         length = None if length is None else int(length * self.samplerate)

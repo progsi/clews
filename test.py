@@ -214,6 +214,16 @@ with torch.inference_mode():
         )
         
     query_c, query_i, query_z, query_m = file_utils.load_from_hdf5(h5path_q)
+    if len(query_i) < expected_len:
+        myprint(f"Warning: expected {expected_len} queries, got {len(query_i)}")
+    elif len(query_i) > expected_len:
+        indices = torch.tensor(dset.get_indices(), dtype=torch.long)
+        mask = torch.isin(query_i, indices)
+        query_i = query_i[mask]
+        query_c = query_c[mask]
+        query_z = query_z[mask]
+        query_m = query_m[mask]
+        
     print(f"Having query embeddings of shape: {query_z.shape}")
         
     query_c = query_c.int()
@@ -236,26 +246,17 @@ with torch.inference_mode():
             )
         cand_c, cand_i, cand_z, cand_m = file_utils.load_from_hdf5(h5path_c)
         print(f"Having candidate embeddings of shape: {cand_z.shape}")
-        if not len(cand_i) == expected_len:
-            myprint(f"Warning: expected {expected_len} candidates, got {len(cand_i)}")
+        if len(cand_i) < expected_len:
+            myprint(f"Warning: expected {expected_len} queries, got {len(query_i)}")
+        elif len(cand_i) > expected_len:
+            cand_i = cand_i[mask]
+            cand_c = cand_c[mask]
+            cand_z = cand_z[mask]
+            cand_m = cand_m[mask]
 
         cand_c = cand_c.int()
         cand_i = cand_i.int()
         cand_z = cand_z.half()
-    
-    # NOTE: I assume not needed anymore because of H5    
-    # # Collect candidates from all GPUs + collapse to batch dim
-    # if fabric.world_size > 1:
-    #     fabric.barrier()
-    #     cand_c = fabric.all_gather(cand_c)
-    #     cand_i = fabric.all_gather(cand_i)
-    #     cand_z = fabric.all_gather(cand_z)
-    #     cand_m = fabric.all_gather(cand_m)
-        
-    #     cand_c = torch.cat(torch.unbind(cand_c, dim=0), dim=0)
-    #     cand_i = torch.cat(torch.unbind(cand_i, dim=0), dim=0)
-    #     cand_z = torch.cat(torch.unbind(cand_z, dim=0), dim=0)
-    #     cand_m = torch.cat(torch.unbind(cand_m, dim=0), dim=0)
 
     # Evaluate
     aps = []
@@ -276,7 +277,10 @@ with torch.inference_mode():
             candidates_m=cand_m,
             redux_strategy=args.redux,
             batch_size_candidates=batch_size_candidates,
-    )
+        )
+        aps.append(ap)
+        r1s.append(r1)
+        rpcs.append(rpc)
     aps = torch.stack(aps)
     r1s = torch.stack(r1s)
     rpcs = torch.stack(rpcs)
@@ -294,7 +298,7 @@ with torch.inference_mode():
 
 # Print
 logdict_mean = {
-    "n": len(aps),
+    "N": len(aps),
     "MAP": aps.mean(),
     "MR1": r1s.mean(),
     "ARP": rpcs.mean(),
