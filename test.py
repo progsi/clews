@@ -52,7 +52,7 @@ torch.backends.cudnn.deterministic = False
 torch.set_float32_matmul_precision("medium")
 torch.autograd.set_detect_anomaly(False)
 fabric = Fabric(
-    accelerator="cuda",
+    accelerator="gpu",
     devices=args.ngpus,
     num_nodes=args.nnodes,
     strategy=DDPStrategy(broadcast_buffers=False),
@@ -222,8 +222,7 @@ with torch.inference_mode():
         query_i = query_i[mask]
         query_c = query_c[mask]
         query_z = query_z[mask]
-        query_m = query_m[mask]
-        
+        query_m = query_m[mask]        
     print(f"Having query embeddings of shape: {query_z.shape}")
         
     query_c = query_c.int()
@@ -245,7 +244,6 @@ with torch.inference_mode():
                 args.qslen, args.qshop, outpath=h5path_c
             )
         cand_c, cand_i, cand_z, cand_m = file_utils.load_from_hdf5(h5path_c)
-        print(f"Having candidate embeddings of shape: {cand_z.shape}")
         if len(cand_i) < expected_len:
             myprint(f"Warning: expected {expected_len} queries, got {len(query_i)}")
         elif len(cand_i) > expected_len:
@@ -253,6 +251,8 @@ with torch.inference_mode():
             cand_c = cand_c[mask]
             cand_z = cand_z[mask]
             cand_m = cand_m[mask]
+        print(f"Having candidate embeddings of shape: {cand_z.shape}")
+
 
         cand_c = cand_c.int()
         cand_i = cand_i.int()
@@ -298,7 +298,7 @@ with torch.inference_mode():
 
 # Print
 logdict_mean = {
-    "N": len(aps),
+    "N": int(len(aps)),
     "MAP": aps.mean(),
     "MR1": r1s.mean(),
     "ARP": rpcs.mean(),
