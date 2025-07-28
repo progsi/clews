@@ -374,3 +374,47 @@ def distance_tensor_redux(dist, redux, mask=None, squeeze=True, eps=1e-7, inf=1e
 
 
 ###################################################################################################
+
+def reduce_windows_if_possible(tensor, old_hop, new_hop, dim=1):
+    """Reduces the window dimension (axis=1) of a (N, W, D) tensor if new_hop > old_hop."""
+    if new_hop <= old_hop:
+        # Can't reduce — already using finer or same granularity
+        raise ValueError(f"Cannot reduce windows: new_hop ({new_hop}) <= old_hop ({old_hop})")
+
+    ratio = new_hop / old_hop
+    if not ratio.is_integer():
+        raise ValueError(f"new_hop ({new_hop}) must be an integer multiple of old_hop ({old_hop})")
+    
+    step = int(ratio)
+    indices = torch.arange(0, tensor.size(dim), step, device=tensor.device)
+    return torch.index_select(tensor, dim, indices)
+
+def all_gather_chunks(tensor, fabric, chunk_size=512):
+    """
+    Gathers a large tensor across all ranks in memory-efficient chunks,
+    with padding to handle unequal splits.
+    """
+    local_len = tensor.shape[0]
+    dtype = tensor.dtype
+    device = tensor.device
+    shape = tensor.shape[1:]  # everything except batch
+
+    gathered_chunks = []
+
+    for start in range(0, local_len, chunk_size):
+        end = min(start + chunk_size, local_len)
+        chunk = tensor[start:end]
+        pad_size = chunk_size - (end - start)
+        if pad_size > 0:
+            pad_tensor = torch.zeros((pad_size, *shape), dtype=dtype, device=device)
+            chunk = torch.cat([chunk, pad_tensor], dim=0)
+        gathered = fabric.all_gather(chunk)  # shape: [world_size, chunk_size, ...]
+        gathered = gathered.cpu()
+        gathered_list = list(torch.unbind(gathered, dim=0))
+        for g in gathered_list:
+            real_len = min(chunk_size, local_len - start)
+            gathered_chunks.append(g[:real_len].clone())
+        del chunk, gathered, gathered_list
+        torch.cuda.empty_cache()
+    result = torch.cat(gathered_chunks, dim=0)
+    return result

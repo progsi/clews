@@ -85,7 +85,8 @@ def load_from_hdf5(file_path):
         query_i = torch.from_numpy(f["index"][:])
         query_z = torch.from_numpy(f["z"][:])
         query_m = torch.from_numpy(f["m"][:])
-    return query_c, query_i, query_z, query_m
+        hop = f.attrs.get("qhop", None)
+    return query_c, query_i, query_z, query_m, hop
         
 def load_from_h5_by_index(h5_path, index, device="cuda"):
     with h5py.File(h5_path, "r") as f:

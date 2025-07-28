@@ -196,9 +196,9 @@ with torch.inference_mode():
     # Extract embeddings
     if args.jobname is not None:
         test_subset = args.jobname.split("-")[-1]
-        h5path_q = os.path.join(log_path, f"test_{test_subset}.h5py")
+        h5path_q = os.path.join(log_path, f"test_{test_subset}.h5")
         if need_seperate_candidates:
-            h5path_c = os.path.join(log_path, f"test_{test_subset}2.h5py")
+            h5path_c = os.path.join(log_path, f"test_{test_subset}2.h5")
         else:
             h5path_c = None
     else:
@@ -210,7 +210,7 @@ with torch.inference_mode():
             args.qslen, args.qshop, outpath=h5path_q
         )
         
-    query_c, query_i, query_z, query_m = file_utils.load_from_hdf5(h5path_q)
+    query_c, query_i, query_z, query_m, qhop = file_utils.load_from_hdf5(h5path_q)
     if len(query_i) < expected_len:
         myprint(f"Warning: expected {expected_len} queries, got {len(query_i)}")
     elif len(query_i) > expected_len:
@@ -219,7 +219,14 @@ with torch.inference_mode():
         query_i = query_i[mask]
         query_c = query_c[mask]
         query_z = query_z[mask]
-        query_m = query_m[mask]        
+        query_m = query_m[mask]
+    
+
+    if qhop != args.qshop:
+        myprint(f"Reducing query windows from {qhop} to {args.qshop} seconds...")
+        query_z = tops.reduce_windows_if_possible(query_z, qhop, args.qshop, dim=1)
+        query_m = tops.reduce_windows_if_possible(query_m, qhop, args.qshop, dim=1)
+
     print(f"Having query embeddings of shape: {query_z.shape}")
         
     query_c = query_c.int()
@@ -240,7 +247,7 @@ with torch.inference_mode():
             extract_embeddings(
                 args.qslen, args.qshop, outpath=h5path_c
             )
-        cand_c, cand_i, cand_z, cand_m = file_utils.load_from_hdf5(h5path_c)
+        cand_c, cand_i, cand_z, cand_m, chop = file_utils.load_from_hdf5(h5path_c)
         if len(cand_i) < expected_len:
             myprint(f"Warning: expected {expected_len:,} queries, got {len(query_i):,}")
         elif len(cand_i) > expected_len:
@@ -248,6 +255,10 @@ with torch.inference_mode():
             cand_c = cand_c[mask]
             cand_z = cand_z[mask]
             cand_m = cand_m[mask]
+        if chop != args.cshop:
+            myprint(f"Reducing candidate windows from {qhop} to {args.qshop} seconds...")
+            query_z = tops.reduce_windows_if_possible(query_z, qhop, args.qshop, dim=1)
+            query_m = tops.reduce_windows_if_possible(query_m, qhop, args.qshop, dim=1)
         print(f"Having candidate embeddings of shape: {cand_z.shape}")
 
         cand_c = cand_c.int()
@@ -256,10 +267,10 @@ with torch.inference_mode():
     
     # Collect candidates from all GPUs + collapse to batch dim
     fabric.barrier()
-    cand_c = pytorch_utils.all_gather_chunks(cand_c.cpu(), fabric, chunk_size=1024)
-    cand_i = pytorch_utils.all_gather_chunks(cand_i.cpu(), fabric, chunk_size=1024)
-    cand_z = pytorch_utils.all_gather_chunks(cand_z.cpu(), fabric, chunk_size=1024)
-    cand_m = pytorch_utils.all_gather_chunks(cand_m.cpu(), fabric, chunk_size=1024)
+    cand_c = tops.all_gather_chunks(cand_c.cpu(), fabric, chunk_size=1024)
+    cand_i = tops.all_gather_chunks(cand_i.cpu(), fabric, chunk_size=1024)
+    cand_z = tops.all_gather_chunks(cand_z.cpu(), fabric, chunk_size=1024)
+    cand_m = tops.all_gather_chunks(cand_m.cpu(), fabric, chunk_size=1024)
 
     # Evaluate
     aps = []
