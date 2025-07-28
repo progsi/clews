@@ -123,7 +123,7 @@ dloader = fabric.setup_dataloaders(dloader)
 ###############################################################################
 
 @torch.inference_mode()
-def extract_embeddings(shingle_len, shingle_hop, outpath, eps=1e-6, save_every=1000):
+def extract_embeddings(shingle_len, shingle_hop, outpath, eps=1e-6):
     shinglen, shinghop = model.get_shingle_params()
     if shingle_len is not None:
         shinglen = shingle_len
@@ -166,28 +166,24 @@ def extract_embeddings(shingle_len, shingle_hop, outpath, eps=1e-6, save_every=1
         buffer["z"].append(z.cpu())
         buffer["m"].append(m.cpu())
 
-        # Save if needed
-        if outpath is not None and ((step + 1) % save_every == 0 or (step + 1) == len(dloader)):
-            file_utils.save_to_hdf5(
-                outpath,
-                {
-                    "clique": torch.cat(buffer["clique"], dim=0),
-                    "index": torch.cat(buffer["index"], dim=0),
-                    "z": torch.cat(buffer["z"], dim=0),
-                    "m": torch.cat(buffer["m"], dim=0),
-                },
-                batch_start=total_saved,
-            )
-            batch_size = buffer["z"][0].shape[0] * len(buffer["z"])
-            total_saved += batch_size
-            myprint(f"Saved checkpoint at batch {step + 1} → total {total_saved} samples")
-
-            # Clear buffer and memory
-            for k in buffer:
-                buffer[k].clear()
-            torch.cuda.empty_cache()
-
     myprint(f"Skipped {skipped} items.")
+    if outpath is not None:
+        file_utils.save_to_hdf5(
+            outpath,
+            {
+                "clique": torch.cat(buffer["clique"], dim=0),
+                "index": torch.cat(buffer["index"], dim=0),
+                "z": torch.cat(buffer["z"], dim=0),
+                "m": torch.cat(buffer["m"], dim=0),
+            },
+            batch_start=total_saved,
+        )
+        myprint(f"Saved checkpoint at batch {step + 1} → total {total_saved} samples")
+
+        # Clear buffer and memory
+        for k in buffer:
+            buffer[k].clear()
+        torch.cuda.empty_cache()
 
     
 ###############################################################################
@@ -245,7 +241,7 @@ with torch.inference_mode():
             )
         cand_c, cand_i, cand_z, cand_m = file_utils.load_from_hdf5(h5path_c)
         if len(cand_i) < expected_len:
-            myprint(f"Warning: expected {expected_len} queries, got {len(query_i)}")
+            myprint(f"Warning: expected {expected_len:,} queries, got {len(query_i):,}")
         elif len(cand_i) > expected_len:
             cand_i = cand_i[mask]
             cand_c = cand_c[mask]
@@ -253,17 +249,28 @@ with torch.inference_mode():
             cand_m = cand_m[mask]
         print(f"Having candidate embeddings of shape: {cand_z.shape}")
 
-
         cand_c = cand_c.int()
         cand_i = cand_i.int()
         cand_z = cand_z.half()
 
+    # Collect candidates from all GPUs + collapse to batch dim
+    fabric.barrier()
+    cand_c = fabric.all_gather(cand_c)
+    cand_i = fabric.all_gather(cand_i)
+    cand_z = fabric.all_gather(cand_z)
+    cand_m = fabric.all_gather(cand_m)
+    cand_c = torch.cat(torch.unbind(cand_c, dim=0), dim=0)
+    cand_i = torch.cat(torch.unbind(cand_i, dim=0), dim=0)
+    cand_z = torch.cat(torch.unbind(cand_z, dim=0), dim=0)
+    cand_m = torch.cat(torch.unbind(cand_m, dim=0), dim=0)
+    
     # Evaluate
     aps = []
     r1s = []
     rpcs = []
     my_queries = range(fabric.global_rank, len(query_z), fabric.world_size)
     batch_size_candidates = 2**15
+    step = 0
     for n in myprogbar(my_queries, desc=f"Retrieve (GPU {fabric.global_rank})", leave=True):
         ap, r1, rpc = eval.compute(
             model,
@@ -281,6 +288,15 @@ with torch.inference_mode():
         aps.append(ap)
         r1s.append(r1)
         rpcs.append(rpc)
+        
+        if step % 100 == 0:
+            # Convert to CPU tensors
+            print(f"\n  Metrics for {len(aps):,} queries on GPU {fabric.global_rank}: ")
+            print(f"    MAP: {torch.stack(aps).mean():.3f}")
+            print(f"    MR1: {torch.stack(r1s).mean():.3f}")
+            print(f"    ARP: {torch.stack(rpcs).mean():.3f}")
+        step += 1
+                
     aps = torch.stack(aps)
     r1s = torch.stack(r1s)
     rpcs = torch.stack(rpcs)

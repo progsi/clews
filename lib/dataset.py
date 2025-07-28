@@ -6,7 +6,7 @@ from tqdm import tqdm
 from utils import audio_utils
 from lib import tensor_ops as tops
 
-LIMIT_CLIQUES = None
+LIMIT_CLIQUES = 500
 
 
 class Dataset(torch.utils.data.Dataset):
@@ -71,7 +71,7 @@ class Dataset(torch.utils.data.Dataset):
         # Prints
         if self.verbose:
             print(
-                f"  {split}: --- Found {len(self.clique)} cliques, {len(self.versions)} songs ---"
+                f"  {split}: --- Found {len(self.clique):,} cliques, {len(self.versions):,} songs ---"
             )
 
     ###########################################################################
