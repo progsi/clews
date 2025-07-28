@@ -38,11 +38,11 @@ if "redux" not in args:  # distance reduction
 if "qslen" not in args:  # query shingle len
     args.qslen = None
 if "qshop" not in args:  # query shingle hop (default = every 5 sec)
-    args.qshop = 5
+    args.qshop = 10 # default: 5
 if "cslen" not in args:  # candidate shingle len
     args.cslen = None
 if "cshop" not in args:  # candidate shingle hop (default = every 5 sec)
-    args.cshop = 5
+    args.cshop = 10 # default: 5
 
 ###############################################################################
 
@@ -253,78 +253,14 @@ with torch.inference_mode():
         cand_c = cand_c.int()
         cand_i = cand_i.int()
         cand_z = cand_z.half()
-
-    # # NOTE: Variant 1 NOTE: also CUDA OOM
-    # import torch.distributed as dist
-    # def all_gather_object_tensor(tensor):
-    #     tensor_cpu = tensor.detach().cpu()
-    #     del tensor
-    #     torch.cuda.empty_cache()
-    #     world_size = dist.get_world_size()
-    #     gathered = [None] * world_size
-    #     dist.all_gather_object(gathered, tensor_cpu)
-    #     result_cpu = torch.cat(gathered, dim=0)
-    #     return result_cpu
     
-    # # Collect candidates from all GPUs + collapse to batch dim
-    # fabric.barrier()
-    # cand_c = all_gather_object_tensor(cand_c.cpu())
-    # cand_i = all_gather_object_tensor(cand_i.cpu())
-    # cand_z = all_gather_object_tensor(cand_z.cpu())
-    # cand_m = all_gather_object_tensor(cand_m.cpu())
-    
-    # NOTE: Variant 2
-    def all_gather_chunks(tensor, fabric, chunk_size=512):
-        """
-        Gathers a large tensor across all ranks in memory-efficient chunks,
-        with padding to handle unequal splits.
-        """
-        rank = fabric.global_rank
-        world_size = fabric.world_size
-        local_len = tensor.shape[0]
-        dtype = tensor.dtype
-        device = tensor.device
-        shape = tensor.shape[1:]  # everything except batch
-
-        gathered_chunks = []
-
-        for start in range(0, local_len, chunk_size):
-            end = min(start + chunk_size, local_len)
-            chunk = tensor[start:end]
-            pad_size = chunk_size - (end - start)
-            if pad_size > 0:
-                pad_tensor = torch.zeros((pad_size, *shape), dtype=dtype, device=device)
-                chunk = torch.cat([chunk, pad_tensor], dim=0)
-            gathered = fabric.all_gather(chunk)  # shape: [world_size, chunk_size, ...]
-            gathered = gathered.cpu()
-            gathered_list = list(torch.unbind(gathered, dim=0))
-            for g in gathered_list:
-                real_len = min(chunk_size, local_len - start)
-                gathered_chunks.append(g[:real_len].clone())
-            del chunk, gathered, gathered_list
-            torch.cuda.empty_cache()
-        result = torch.cat(gathered_chunks, dim=0)
-        return result
-
     # Collect candidates from all GPUs + collapse to batch dim
     fabric.barrier()
-    cand_c = all_gather_chunks(cand_c.cpu(), fabric, chunk_size=1024)
-    cand_i = all_gather_chunks(cand_i.cpu(), fabric, chunk_size=1024)
-    cand_z = all_gather_chunks(cand_z.cpu(), fabric, chunk_size=1024)
-    cand_m = all_gather_chunks(cand_m.cpu(), fabric, chunk_size=1024)
+    cand_c = pytorch_utils.all_gather_chunks(cand_c.cpu(), fabric, chunk_size=1024)
+    cand_i = pytorch_utils.all_gather_chunks(cand_i.cpu(), fabric, chunk_size=1024)
+    cand_z = pytorch_utils.all_gather_chunks(cand_z.cpu(), fabric, chunk_size=1024)
+    cand_m = pytorch_utils.all_gather_chunks(cand_m.cpu(), fabric, chunk_size=1024)
 
-    # NOTE: original
-    # # Collect candidates from all GPUs + collapse to batch dim
-    # fabric.barrier()
-    # cand_c = fabric.all_gather_object(cand_c.cpu())
-    # cand_i = fabric.all_gather_object(cand_i.cpu())
-    # cand_z = fabric.all_gather_object(cand_z.cpu())
-    # cand_m = fabric.all_gather_object(cand_m.cpu())
-    # cand_c = torch.cat(torch.unbind(cand_c, dim=0), dim=0)
-    # cand_i = torch.cat(torch.unbind(cand_i, dim=0), dim=0)
-    # cand_z = torch.cat(torch.unbind(cand_z, dim=0), dim=0)
-    # cand_m = torch.cat(torch.unbind(cand_m, dim=0), dim=0)
-    
     # Evaluate
     aps = []
     r1s = []
