@@ -38,11 +38,11 @@ if "redux" not in args:  # distance reduction
 if "qslen" not in args:  # query shingle len
     args.qslen = None
 if "qshop" not in args:  # query shingle hop (default = every 5 sec)
-    args.qshop = 10 # default: 5
+    args.qshop = 10 # initially: 5
 if "cslen" not in args:  # candidate shingle len
     args.cslen = None
 if "cshop" not in args:  # candidate shingle hop (default = every 5 sec)
-    args.cshop = 10 # default: 5
+    args.cshop = 10 # initially: 5
 
 ###############################################################################
 
