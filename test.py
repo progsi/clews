@@ -109,6 +109,7 @@ dset = dataset.Dataset(
     augment=False,
     fullsongs=True,
     verbose=fabric.is_global_zero,
+    limit_cliques=args.limit_num,
 )
 sampler = DistributedSampler(dset, num_replicas=fabric.world_size, rank=fabric.global_rank, shuffle=False)
 dloader = torch.utils.data.DataLoader(
@@ -253,16 +254,55 @@ with torch.inference_mode():
         cand_i = cand_i.int()
         cand_z = cand_z.half()
 
+    # NOTE: Variant 1
+    import torch.distributed as dist
+    def all_gather_object_tensor(tensor):
+        tensor_cpu = tensor.cpu()
+        world_size = dist.get_world_size()
+        gathered = [None] * world_size  # preallocate list with correct size
+        dist.all_gather_object(gathered, tensor_cpu)
+        return torch.cat(gathered, dim=0)
+    
     # Collect candidates from all GPUs + collapse to batch dim
     fabric.barrier()
-    cand_c = fabric.all_gather(cand_c)
-    cand_i = fabric.all_gather(cand_i)
-    cand_z = fabric.all_gather(cand_z)
-    cand_m = fabric.all_gather(cand_m)
-    cand_c = torch.cat(torch.unbind(cand_c, dim=0), dim=0)
-    cand_i = torch.cat(torch.unbind(cand_i, dim=0), dim=0)
-    cand_z = torch.cat(torch.unbind(cand_z, dim=0), dim=0)
-    cand_m = torch.cat(torch.unbind(cand_m, dim=0), dim=0)
+    cand_c = all_gather_object_tensor(cand_c.cpu())
+    cand_i = all_gather_object_tensor(cand_i.cpu())
+    cand_z = all_gather_object_tensor(cand_z.cpu())
+    cand_m = all_gather_object_tensor(cand_m.cpu())
+    
+    # # NOTE: Variant 2
+    # def all_gather_chunks(tensor, fabric, chunk_size=512):
+    #     """Gather a large tensor from all GPUs in smaller chunks to avoid OOM."""
+    #     gathered_chunks = []
+    #     for start in range(0, tensor.shape[0], chunk_size):
+    #         end = min(start + chunk_size, tensor.shape[0])
+    #         chunk = tensor[start:end]
+    #         gathered = fabric.all_gather(chunk)
+    #         gathered = gathered.cpu()
+    #         gathered_chunks.append(gathered)
+    #         del chunk, gathered
+    #         torch.cuda.empty_cache()
+    #     result = torch.cat(gathered_chunks, dim=0)
+    #     return result
+
+    # # Collect candidates from all GPUs + collapse to batch dim
+    # fabric.barrier()
+    # cand_c = all_gather_chunks(cand_c.cpu(), fabric, chunk_size=1024)
+    # cand_i = all_gather_chunks(cand_i.cpu(), fabric, chunk_size=1024)
+    # cand_z = all_gather_chunks(cand_z.cpu(), fabric, chunk_size=1024)
+    # cand_m = all_gather_chunks(cand_m.cpu(), fabric, chunk_size=1024)
+
+    # NOTE: original
+    # # Collect candidates from all GPUs + collapse to batch dim
+    # fabric.barrier()
+    # cand_c = fabric.all_gather_object(cand_c.cpu())
+    # cand_i = fabric.all_gather_object(cand_i.cpu())
+    # cand_z = fabric.all_gather_object(cand_z.cpu())
+    # cand_m = fabric.all_gather_object(cand_m.cpu())
+    # cand_c = torch.cat(torch.unbind(cand_c, dim=0), dim=0)
+    # cand_i = torch.cat(torch.unbind(cand_i, dim=0), dim=0)
+    # cand_z = torch.cat(torch.unbind(cand_z, dim=0), dim=0)
+    # cand_m = torch.cat(torch.unbind(cand_m, dim=0), dim=0)
     
     # Evaluate
     aps = []

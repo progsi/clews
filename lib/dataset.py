@@ -6,8 +6,6 @@ from tqdm import tqdm
 from utils import audio_utils
 from lib import tensor_ops as tops
 
-LIMIT_CLIQUES = None
-
 
 class Dataset(torch.utils.data.Dataset):
 
@@ -19,6 +17,7 @@ class Dataset(torch.utils.data.Dataset):
         fullsongs=False,
         checks=True,
         verbose=False,
+        limit_cliques=None
     ):
         assert split in ("train", "valid", "test")
         # Params
@@ -34,15 +33,15 @@ class Dataset(torch.utils.data.Dataset):
         # Load metadata
         print(f"Loading metadata from {conf.path.meta}...")
         self.info, splitdict = torch.load(conf.path.meta)
-        if LIMIT_CLIQUES is None:
+        if limit_cliques is None:
             self.clique = splitdict[split]
         else:
             if self.verbose:
-                print(f"[Limiting cliques to {LIMIT_CLIQUES}]")
+                print(f"[Limiting cliques to {limit_cliques}]")
             self.clique = {}
             for key, item in splitdict[split].items():
                 self.clique[key] = item
-                if len(self.clique) == LIMIT_CLIQUES:
+                if len(self.clique) == limit_cliques:
                     break
 
         # Update filename with audio_path
