@@ -297,7 +297,7 @@ with torch.inference_mode():
         r1s.append(r1)
         rpcs.append(rpc)
         
-        if step % 100 == 0:
+        if (step + 1) % 100 == 0 or step == len(my_queries) - 1:
             # Convert to CPU tensors
             print(f"\n  Metrics for {len(aps):,} queries on GPU {fabric.global_rank}: ")
             print(f"    MAP: {torch.stack(aps).mean():.3f}")
@@ -311,12 +311,9 @@ with torch.inference_mode():
 
     # Collect measures from all GPUs + collapse to batch dim
     fabric.barrier()
-    aps = fabric.all_gather(aps)
-    r1s = fabric.all_gather(r1s)
-    rpcs = fabric.all_gather(rpcs)
-    aps = torch.cat(torch.unbind(aps, dim=0), dim=0)
-    r1s = torch.cat(torch.unbind(r1s, dim=0), dim=0)
-    rpcs = torch.cat(torch.unbind(rpcs, dim=0), dim=0)
+    aps = tops.all_gather_chunks(aps.cpu(), fabric, chunk_size=1024)
+    r1s = tops.all_gather_chunks(r1s.cpu(), fabric, chunk_size=1024)
+    rpcs = tops.all_gather_chunks(rpcs.cpu(), fabric, chunk_size=1024)
 
 ###############################################################################
 
