@@ -257,11 +257,14 @@ with torch.inference_mode():
     # NOTE: Variant 1
     import torch.distributed as dist
     def all_gather_object_tensor(tensor):
-        tensor_cpu = tensor.cpu()
+        tensor_cpu = tensor.detach().cpu()
+        del tensor
+        torch.cuda.empty_cache()
         world_size = dist.get_world_size()
-        gathered = [None] * world_size  # preallocate list with correct size
+        gathered = [None] * world_size
         dist.all_gather_object(gathered, tensor_cpu)
-        return torch.cat(gathered, dim=0)
+        result_cpu = torch.cat(gathered, dim=0)
+        return result_cpu
     
     # Collect candidates from all GPUs + collapse to batch dim
     fabric.barrier()
