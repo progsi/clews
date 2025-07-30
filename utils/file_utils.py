@@ -55,11 +55,13 @@ def load_jsons(fn, limit_lines=None):
                 break
     return d
 
-def save_to_hdf5(file_path, data_dict, dataset_dims=None, batch_start=None):
+def save_to_hdf5(file_path, data_dict, dataset_dims=None, batch_start=None, hop=None):
     """
     Appends or initializes datasets in an HDF5 file.
     """
     with h5py.File(file_path, "a") as f:
+        if hop is not None:
+            f.attrs["qhop"] = hop
         for key, value in data_dict.items():
             arr = value.detach().cpu().numpy()
             if key not in f:

@@ -1,11 +1,15 @@
 import sys
 import os
 import torch
+import numpy as np
+import torch.nn.functional as F
 from tqdm import tqdm
 
 from utils import audio_utils
 from lib import tensor_ops as tops
 
+
+NAN_LABEL = "(None)"
 
 class Dataset(torch.utils.data.Dataset):
 
@@ -32,7 +36,12 @@ class Dataset(torch.utils.data.Dataset):
         self.verbose = verbose
         # Load metadata
         print(f"Loading metadata from {conf.path.meta}...")
-        self.info, splitdict = torch.load(conf.path.meta)
+        meta = torch.load(conf.path.meta)
+        if isinstance(meta, dict):
+            self.info = meta["info"]
+            splitdict = meta["split"]
+        elif isinstance(meta, list):
+            self.info, splitdict = meta
         if limit_cliques is None:
             self.clique = splitdict[split]
         else:
@@ -184,3 +193,133 @@ class Dataset(torch.utils.data.Dataset):
             print(msg[1:])
         if errors:
             sys.exit()
+         
+            
+class CrossDomainDataset(Dataset):
+    """
+    Dataset for cross-domain evaluation.
+    """
+    def __init__(self, 
+                 domain, 
+                 conf, 
+                 split, 
+                 augment=False, 
+                 fullsongs=False, 
+                 checks=True, 
+                 verbose=False, 
+                 qsdomain=None, 
+                 csdomain=None,
+                 limit_cliques=None):
+        super().__init__(conf, split, augment, fullsongs, checks, verbose, limit_cliques)
+        # Cross-domain specific attributes
+        assert domain is not None, "Domain must be specified for CrossDomainDataset"
+        assert (qsdomain is not None and csdomain is not None) or (qsdomain is None and csdomain is None), "Must either specify both query and candidate domains or neither"
+        self.domain = domain
+        self.init_domain_labels()
+        self.qsdomain = qsdomain
+        self.csdomain = csdomain
+        # TODO: add filtering based on qsdomain and csdomain
+        if self.verbose:
+            print(f"Cross-domain: {self.cross_domain}, Query domain: {self.qsdomain}, Candidate domain: {self.csdomain}")
+
+    def get_filter_mask(self, domain_label):
+        """
+        Filter versions based on query and candidate domains.
+        """
+        intlabel = self.label2ids[domain_label]
+        return torch.stack(self.domains_processed)[:, intlabel] > 0
+    
+    def get_value_list(self, key: str) -> list:
+        """Get all values for a given key."""
+        return [e[key] for e in list(self.info.values())]
+    
+    def get_label2id_map(self, 
+                         value_list: list, 
+                         keep_nan: bool = False) -> dict:
+        """Get a mapping from label to id for a given key."""
+        labels = []
+        for label in value_list:
+            if isinstance(label, str) and not (label == ''):
+                labels.append(label)
+            elif (isinstance(label, str) and (label == '') or isinstance(label, float) and np.isnan(label)) or label is None:
+                if keep_nan:
+                    labels.append(NAN_LABEL)
+                else:
+                    continue
+            elif isinstance(label, (list, tuple)):
+                for slabel in label:
+                    if isinstance(slabel, str):
+                        labels.append(slabel)
+                    else:
+                        raise ValueError(f"Expected string, got: {type(slabel)}")
+            elif isinstance(label, dict):
+                slabels = self.matches2labels(label)
+                for slabel in slabels:                    
+                    labels.append(slabel)
+            else:
+                raise ValueError(f"Expected string or iterable of strings, got: {type(label)}")
+        labels = sorted(set(labels))
+        label2id = {label: idx for idx, label in enumerate(labels)}
+        return label2id
+    
+    def matches2labels(self, match_dict: dict, ignore_cols: list = None, ignore_labels: list = None) -> list:
+        """Transform match dict to list of matched labels."""
+        labels = []
+        for col, matches in match_dict.items():
+            if ignore_cols and col in ignore_cols:
+                continue
+            for label in matches.keys():
+                if ignore_labels and label in ignore_labels:
+                    continue
+                labels.append(label)
+        return labels
+    
+    @staticmethod
+    def ints2multihot(items: list, n: int) -> torch.Tensor:
+        """Encodes a list of integers as a multi-hot tensor."""
+        items = torch.tensor(items)
+        if len(items) > 0:
+            ids = torch.sum(F.one_hot(items, n), axis=0)
+        else:
+            ids = torch.zeros(n)
+        return ids
+    
+    def init_domain_labels(self):
+        """"""
+        self.label2ids = {}
+        self.aux_processed = {}
+        self.cls_weights = {}
+        self.domains_processed = {}
+        tlabels = self.get_value_list(self.domain) 
+        if self.domain == "release_styles":
+            # Special case for release_styles, which is a list of tuples
+            tlabels = self.join_sublists(tlabels, sep=": ")
+        elif self.domain == "country":
+            # TODO: implement
+            pass
+                    
+        self.label2ids = self.get_label2id_map(tlabels, keep_nan=False)
+        
+        tlabels_processed = []
+        for i, row in enumerate(tlabels):
+            # transform string labels to ids
+            ids = []
+            if row is not None and row != np.nan:
+                if isinstance(row, list):
+                    slabels = row
+                elif isinstance(row, dict):
+                    slabels = self.matches2labels(row)
+                for slabel in slabels:
+                    ids.append(self.label2ids[slabel])  # -1 for unknown labels
+            else:
+                if self.label2ids.get(NAN_LABEL, False):
+                    ids.append(self.label2ids[NAN_LABEL])  # -1 for unknown labels
+            tlabels_processed.append(self.ints2multihot(ids, len(self.label2ids))) 
+        # always keep multi-hot tensor
+        self.domains_processed = tlabels_processed        
+
+        # transform
+        item_keys = [v["id"] for v in self.info.values()]
+        for idx, item_key in tqdm(enumerate(item_keys), desc="Transforming auxiliary data...", total=len(item_keys)):
+            self.aux_processed[item_key] = tlabels_processed[idx]
+        print(f"  Domain labels processed: {len(self.aux_processed)} items, {len(self.label2ids)} classes")

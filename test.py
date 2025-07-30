@@ -27,6 +27,12 @@ if "path_meta" not in args:
     args.path_meta = None
 if "partition" not in args:
     args.partition = "test"
+if "domain" not in args:
+    args.cross_domain = None
+if "qsdomain" not in args:
+    args.qsdomain = None
+if "csdomain" not in args:
+    args.csdomain = None
 if "limit_num" not in args:
     args.limit_num = None
 
@@ -102,15 +108,30 @@ if args.path_meta is not None:
 conf.data.path = conf.path
 
 # Get dataset
-myprint("Dataset...")
-dset = dataset.Dataset(
-    conf.data,
-    args.partition,
-    augment=False,
-    fullsongs=True,
-    verbose=fabric.is_global_zero,
-    limit_cliques=args.limit_num,
-)
+if args.domain is not None:
+    myprint(f"Using cross-domain dataset with domain {args.domain}...")
+    dset = dataset.CrossDomainDataset(
+        args.domain,
+        conf.data,
+        args.partition,
+        qsdomain=args.qsdomain,
+        csdomain=args.csdomain,
+        augment=False,
+        fullsongs=True,
+        verbose=fabric.is_global_zero,
+        limit_cliques=args.limit_num,
+    )
+else:
+    myprint("Using normal dataset...")
+    dset = dataset.Dataset(
+        conf.data,
+        args.partition,
+        augment=False,
+        fullsongs=True,
+        verbose=fabric.is_global_zero,
+        limit_cliques=args.limit_num,
+    )
+
 sampler = DistributedSampler(dset, num_replicas=fabric.world_size, rank=fabric.global_rank, shuffle=False)
 dloader = torch.utils.data.DataLoader(
     dset,
@@ -178,6 +199,7 @@ def extract_embeddings(shingle_len, shingle_hop, outpath, eps=1e-6):
                 "m": torch.cat(buffer["m"], dim=0),
             },
             batch_start=total_saved,
+            hop=shinghop
         )
         myprint(f"Saved checkpoint at batch {step + 1} → total {total_saved} samples")
 
@@ -189,148 +211,150 @@ def extract_embeddings(shingle_len, shingle_hop, outpath, eps=1e-6):
     
 ###############################################################################
 
-# Let's go
-with torch.inference_mode():
+def evaluate(batch_size_candidates=2**15):
+    # Let's go
+    with torch.inference_mode():
 
-    need_seperate_candidates = not args.cslen == args.qslen or not args.cshop == args.qshop
-    # Extract embeddings
-    if args.jobname is not None:
-        test_subset = args.jobname.split("-")[-1]
-        h5path_q = os.path.join(log_path, f"test_{test_subset}.h5")
-        if need_seperate_candidates:
-            h5path_c = os.path.join(log_path, f"test_{test_subset}2.h5")
+        need_seperate_candidates = not args.cslen == args.qslen or not args.cshop == args.qshop
+        # Extract embeddings
+        if args.jobname is not None:
+            test_subset = args.jobname.split("-")[-1]
+            h5path_q = os.path.join(log_path, f"test_{test_subset}.h5")
+            if need_seperate_candidates:
+                h5path_c = os.path.join(log_path, f"test_{test_subset}2.h5")
+            else:
+                h5path_c = None
         else:
-            h5path_c = None
-    else:
-        h5path_q, h5path_c = None
-    
-    expected_len = len(dloader)
-    if h5path_q is None or not os.path.isfile(h5path_q):
-        extract_embeddings(
-            args.qslen, args.qshop, outpath=h5path_q
-        )
+            h5path_q, h5path_c = None
         
-    query_c, query_i, query_z, query_m, qhop = file_utils.load_from_hdf5(h5path_q)
-    if len(query_i) < expected_len:
-        myprint(f"Warning: expected {expected_len} queries, got {len(query_i)}")
-    elif len(query_i) > expected_len:
-        indices = torch.tensor(dset.get_indices(), dtype=torch.long)
-        mask = torch.isin(query_i, indices)
-        query_i = query_i[mask]
-        query_c = query_c[mask]
-        query_z = query_z[mask]
-        query_m = query_m[mask]
-    
-
-    if qhop != args.qshop:
-        myprint(f"Reducing query windows from {qhop} to {args.qshop} seconds...")
-        query_z = tops.reduce_windows_if_possible(query_z, qhop, args.qshop, dim=1)
-        query_m = tops.reduce_windows_if_possible(query_m, qhop, args.qshop, dim=1)
-
-    print(f"Having query embeddings of shape: {query_z.shape}")
-        
-    query_c = query_c.int()
-    query_i = query_i.int()
-    query_z = query_z.half()
-    
-
-    if not need_seperate_candidates:
-        myprint("Cand emb: (copy)")
-        cand_c, cand_i, cand_z, cand_m = (
-            query_c.clone(),
-            query_i.clone(),
-            query_z.clone(),
-            query_m.clone(),
-        )
-    else:
-        if h5path_q is None or not os.path.isfile(h5path_c):
+        expected_len = len(dloader)
+        if h5path_q is None or not os.path.isfile(h5path_q):
             extract_embeddings(
-                args.qslen, args.qshop, outpath=h5path_c
+                args.qslen, args.qshop, outpath=h5path_q
             )
-        cand_c, cand_i, cand_z, cand_m, chop = file_utils.load_from_hdf5(h5path_c)
-        if len(cand_i) < expected_len:
-            myprint(f"Warning: expected {expected_len:,} queries, got {len(query_i):,}")
-        elif len(cand_i) > expected_len:
-            cand_i = cand_i[mask]
-            cand_c = cand_c[mask]
-            cand_z = cand_z[mask]
-            cand_m = cand_m[mask]
-        if chop != args.cshop:
-            myprint(f"Reducing candidate windows from {qhop} to {args.qshop} seconds...")
+            
+        query_c, query_i, query_z, query_m, qhop = file_utils.load_from_hdf5(h5path_q)
+        if len(query_i) < expected_len:
+            myprint(f"Warning: expected {expected_len} queries, got {len(query_i)}")
+        elif len(query_i) > expected_len:
+            indices = torch.tensor(dset.get_indices(), dtype=torch.long)
+            mask = torch.isin(query_i, indices)
+            query_i = query_i[mask]
+            query_c = query_c[mask]
+            query_z = query_z[mask]
+            query_m = query_m[mask]
+        
+
+        if qhop != args.qshop:
+            myprint(f"Reducing query windows from {qhop} to {args.qshop} seconds...")
             query_z = tops.reduce_windows_if_possible(query_z, qhop, args.qshop, dim=1)
             query_m = tops.reduce_windows_if_possible(query_m, qhop, args.qshop, dim=1)
-        print(f"Having candidate embeddings of shape: {cand_z.shape}")
 
-        cand_c = cand_c.int()
-        cand_i = cand_i.int()
-        cand_z = cand_z.half()
-    
-    # Collect candidates from all GPUs + collapse to batch dim
-    fabric.barrier()
-    cand_c = tops.all_gather_chunks(cand_c.cpu(), fabric, chunk_size=1024)
-    cand_i = tops.all_gather_chunks(cand_i.cpu(), fabric, chunk_size=1024)
-    cand_z = tops.all_gather_chunks(cand_z.cpu(), fabric, chunk_size=1024)
-    cand_m = tops.all_gather_chunks(cand_m.cpu(), fabric, chunk_size=1024)
-
-    # Evaluate
-    aps = []
-    r1s = []
-    rpcs = []
-    my_queries = range(fabric.global_rank, len(query_z), fabric.world_size)
-    batch_size_candidates = 2**15
-    step = 0
-    for n in myprogbar(my_queries, desc=f"Retrieve (GPU {fabric.global_rank})", leave=True):
-        ap, r1, rpc = eval.compute(
-            model,
-            query_c[n : n + 1],
-            query_i[n : n + 1],
-            query_z[n : n + 1],
-            cand_c,
-            cand_i,
-            cand_z,
-            queries_m=query_m[n : n + 1],
-            candidates_m=cand_m,
-            redux_strategy=args.redux,
-            batch_size_candidates=batch_size_candidates,
-        )
-        aps.append(ap)
-        r1s.append(r1)
-        rpcs.append(rpc)
+        print(f"Having query embeddings of shape: {query_z.shape}")
+            
+        query_c = query_c.int()
+        query_i = query_i.int()
+        query_z = query_z.half()
         
-        if (step + 1) % 100 == 0 or step == len(my_queries) - 1:
-            # Convert to CPU tensors
-            print(f"\n  Metrics for {len(aps):,} queries on GPU {fabric.global_rank}: ")
-            print(f"    MAP: {torch.stack(aps).mean():.3f}")
-            print(f"    MR1: {torch.stack(r1s).mean():.3f}")
-            print(f"    ARP: {torch.stack(rpcs).mean():.3f}")
-        step += 1
-                
-    aps = torch.stack(aps)
-    r1s = torch.stack(r1s)
-    rpcs = torch.stack(rpcs)
 
-    # Collect measures from all GPUs + collapse to batch dim
-    fabric.barrier()
-    aps = tops.all_gather_chunks(aps.cpu(), fabric, chunk_size=1024)
-    r1s = tops.all_gather_chunks(r1s.cpu(), fabric, chunk_size=1024)
-    rpcs = tops.all_gather_chunks(rpcs.cpu(), fabric, chunk_size=1024)
+        if not need_seperate_candidates:
+            myprint("Cand emb: (copy)")
+            cand_c, cand_i, cand_z, cand_m = (
+                query_c.clone(),
+                query_i.clone(),
+                query_z.clone(),
+                query_m.clone(),
+            )
+        else:
+            if h5path_q is None or not os.path.isfile(h5path_c):
+                extract_embeddings(
+                    args.qslen, args.qshop, outpath=h5path_c
+                )
+            cand_c, cand_i, cand_z, cand_m, chop = file_utils.load_from_hdf5(h5path_c)
+            if len(cand_i) < expected_len:
+                myprint(f"Warning: expected {expected_len:,} queries, got {len(query_i):,}")
+            elif len(cand_i) > expected_len:
+                cand_i = cand_i[mask]
+                cand_c = cand_c[mask]
+                cand_z = cand_z[mask]
+                cand_m = cand_m[mask]
+            if chop != args.cshop:
+                myprint(f"Reducing candidate windows from {qhop} to {args.qshop} seconds...")
+                query_z = tops.reduce_windows_if_possible(query_z, qhop, args.qshop, dim=1)
+                query_m = tops.reduce_windows_if_possible(query_m, qhop, args.qshop, dim=1)
+            print(f"Having candidate embeddings of shape: {cand_z.shape}")
 
-###############################################################################
+            cand_c = cand_c.int()
+            cand_i = cand_i.int()
+            cand_z = cand_z.half()
+        
+        # Collect candidates from all GPUs + collapse to batch dim
+        fabric.barrier()
+        cand_c = tops.all_gather_chunks(cand_c.cpu(), fabric, chunk_size=1024)
+        cand_i = tops.all_gather_chunks(cand_i.cpu(), fabric, chunk_size=1024)
+        cand_z = tops.all_gather_chunks(cand_z.cpu(), fabric, chunk_size=1024)
+        cand_m = tops.all_gather_chunks(cand_m.cpu(), fabric, chunk_size=1024)
 
-# Print
-logdict_mean = {
-    "N": len(aps),
-    "MAP": aps.mean(),
-    "MR1": r1s.mean(),
-    "ARP": rpcs.mean(),
-}
-logdict_ci = {
-    "MAP": 1.96 * aps.std() / math.sqrt(len(aps)),
-    "MR1": 1.96 * r1s.std() / math.sqrt(len(r1s)),
-    "ARP": 1.96 * rpcs.std() / math.sqrt(len(rpcs)),
-}
-myprint("=" * 100)
-myprint("Result:")
-myprint("  Avg --> " + print_utils.report(logdict_mean, clean_line=False))
-myprint("  c.i. -> " + print_utils.report(logdict_ci, clean_line=False))
-myprint("=" * 100)
+        # Evaluate
+        aps = []
+        r1s = []
+        rpcs = []
+        my_queries = range(fabric.global_rank, len(query_z), fabric.world_size)
+        step = 0
+        for n in myprogbar(my_queries, desc=f"Retrieve (GPU {fabric.global_rank})", leave=True):
+            ap, r1, rpc = eval.compute(
+                model,
+                query_c[n : n + 1],
+                query_i[n : n + 1],
+                query_z[n : n + 1],
+                cand_c,
+                cand_i,
+                cand_z,
+                queries_m=query_m[n : n + 1],
+                candidates_m=cand_m,
+                redux_strategy=args.redux,
+                batch_size_candidates=batch_size_candidates,
+            )
+            aps.append(ap)
+            r1s.append(r1)
+            rpcs.append(rpc)
+            
+            if (step + 1) % 100 == 0 or step == len(my_queries) - 1:
+                # Convert to CPU tensors
+                print(f"\n  Metrics for {len(aps):,} queries on GPU {fabric.global_rank}: ")
+                print(f"    MAP: {torch.stack(aps).mean():.3f}")
+                print(f"    MR1: {torch.stack(r1s).mean():.3f}")
+                print(f"    ARP: {torch.stack(rpcs).mean():.3f}")
+            step += 1
+                    
+        aps = torch.stack(aps)
+        r1s = torch.stack(r1s)
+        rpcs = torch.stack(rpcs)
+
+        # Collect measures from all GPUs + collapse to batch dim
+        fabric.barrier()
+        aps = tops.all_gather_chunks(aps.cpu(), fabric, chunk_size=1024)
+        r1s = tops.all_gather_chunks(r1s.cpu(), fabric, chunk_size=1024)
+        rpcs = tops.all_gather_chunks(rpcs.cpu(), fabric, chunk_size=1024)
+
+    ###############################################################################
+
+    # Print
+    logdict_mean = {
+        "N": len(aps),
+        "MAP": aps.mean(),
+        "MR1": r1s.mean(),
+        "ARP": rpcs.mean(),
+    }
+    logdict_ci = {
+        "MAP": 1.96 * aps.std() / math.sqrt(len(aps)),
+        "MR1": 1.96 * r1s.std() / math.sqrt(len(r1s)),
+        "ARP": 1.96 * rpcs.std() / math.sqrt(len(rpcs)),
+    }
+    myprint("=" * 100)
+    myprint("Result:")
+    myprint("  Avg --> " + print_utils.report(logdict_mean, clean_line=False))
+    myprint("  c.i. -> " + print_utils.report(logdict_ci, clean_line=False))
+    myprint("=" * 100)
+    
+evaluate(batch_size_candidates=2**15)
