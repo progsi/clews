@@ -29,6 +29,8 @@ if "partition" not in args:
     args.partition = "test"
 if "domain" not in args:
     args.cross_domain = None
+if "domain_mode" not in args:
+    args.domain_mode = None
 if "qsdomain" not in args:
     args.qsdomain = None
 if "csdomain" not in args:
@@ -114,13 +116,16 @@ if args.domain is not None:
         args.domain,
         conf.data,
         args.partition,
-        qsdomain=args.qsdomain,
-        csdomain=args.csdomain,
         augment=False,
         fullsongs=True,
         verbose=fabric.is_global_zero,
         limit_cliques=args.limit_num,
     )
+    if args.domain_mode is not None:
+        myprint(f"Using domain mode {args.domain_mode}...")
+        cmask = dset.get_domain_mask(args.domain_mode)
+    elif args.qsdomain is not None and args.csdomain is not None:
+        cmask = dset.get_domain_mask("pair", args.qsdomain, args.csdomain)
 else:
     myprint("Using normal dataset...")
     dset = dataset.Dataset(
@@ -131,6 +136,7 @@ else:
         verbose=fabric.is_global_zero,
         limit_cliques=args.limit_num,
     )
+    cmask = None
 
 sampler = DistributedSampler(dset, num_replicas=fabric.world_size, rank=fabric.global_rank, shuffle=False)
 dloader = torch.utils.data.DataLoader(
@@ -211,7 +217,7 @@ def extract_embeddings(shingle_len, shingle_hop, outpath, eps=1e-6):
     
 ###############################################################################
 
-def evaluate(batch_size_candidates=2**15):
+def evaluate(batch_size_candidates=2**15, cmask=None):
     # Let's go
     with torch.inference_mode():
 
@@ -299,25 +305,30 @@ def evaluate(batch_size_candidates=2**15):
         aps = []
         r1s = []
         rpcs = []
+        ncands = []
         my_queries = range(fabric.global_rank, len(query_z), fabric.world_size)
         step = 0
         for n in myprogbar(my_queries, desc=f"Retrieve (GPU {fabric.global_rank})", leave=True):
+            if cmask is not None and (cmask[n].sum() == 0) or ((query_c[n : n + 1].unsqueeze(1) == cand_c[cmask[n]]).sum() <= 1).item():
+                continue  # skip if no valid candidates
+                
             ap, r1, rpc = eval.compute(
                 model,
                 query_c[n : n + 1],
                 query_i[n : n + 1],
                 query_z[n : n + 1],
-                cand_c,
-                cand_i,
-                cand_z,
+                cand_c[cmask[n]] if cmask is not None else cand_c,
+                cand_i[cmask[n]] if cmask is not None else cand_i,
+                cand_z[cmask[n]] if cmask is not None else cand_z,
                 queries_m=query_m[n : n + 1],
-                candidates_m=cand_m,
+                candidates_m=cand_m[cmask[n]] if cmask is not None else cand_m,
                 redux_strategy=args.redux,
                 batch_size_candidates=batch_size_candidates,
             )
             aps.append(ap)
             r1s.append(r1)
             rpcs.append(rpc)
+            ncands.append(torch.sum(cmask[n], dtype=torch.int32) if cmask is not None else torch.tensor(len(cand_i)))
             
             if (step + 1) % 100 == 0 or step == len(my_queries) - 1:
                 # Convert to CPU tensors
@@ -330,23 +341,37 @@ def evaluate(batch_size_candidates=2**15):
         aps = torch.stack(aps)
         r1s = torch.stack(r1s)
         rpcs = torch.stack(rpcs)
+        ncands = torch.stack(ncands)
 
         # Collect measures from all GPUs + collapse to batch dim
         fabric.barrier()
         aps = tops.all_gather_chunks(aps.cpu(), fabric, chunk_size=1024)
         r1s = tops.all_gather_chunks(r1s.cpu(), fabric, chunk_size=1024)
         rpcs = tops.all_gather_chunks(rpcs.cpu(), fabric, chunk_size=1024)
+        ncands = tops.all_gather_chunks(ncands.cpu(), fabric, chunk_size=1024)
 
     ###############################################################################
 
     # Print
     logdict_mean = {
-        "N": len(aps),
+        # evaluation measures
         "MAP": aps.mean(),
         "MR1": r1s.mean(),
         "ARP": rpcs.mean(),
     }
+    logdict_stats = {
+        # number of queries
+        "nQs": len(aps), 
+    }
+    if cmask is not None:
+        logdict_stats["nCs_median"] = ncands.float().median().int().item()
+        logdict_stats["nCs_mean"] = ncands.float().median().item()
+        logdict_stats["nCs_std"] = ncands.float().median().item()
+        logdict_stats["nCs_min"] = ncands.float().median().int().item()
+        logdict_stats["nCs_max"] = ncands.float().median().int().item()
+
     logdict_ci = {
+        # confidence intervals for evaluation measures
         "MAP": 1.96 * aps.std() / math.sqrt(len(aps)),
         "MR1": 1.96 * r1s.std() / math.sqrt(len(r1s)),
         "ARP": 1.96 * rpcs.std() / math.sqrt(len(rpcs)),
@@ -355,6 +380,15 @@ def evaluate(batch_size_candidates=2**15):
     myprint("Result:")
     myprint("  Avg --> " + print_utils.report(logdict_mean, clean_line=False))
     myprint("  c.i. -> " + print_utils.report(logdict_ci, clean_line=False))
+    myprint("  Stats -->\n" + print_utils.report(logdict_stats, sep="\n", clean_line=False))
     myprint("=" * 100)
-    
-evaluate(batch_size_candidates=2**15)
+
+if args.domain is not None:
+    myprint(f"Evaluating cross-domain dataset with domain {args.domain}...")
+    if args.domain_mode is not None:
+        print(f"Results for {args.domain_mode} domains:")
+    elif args.qsdomain is not None and args.csdomain is not None:
+        print(f"Results for {args.qsdomain}-to-{args.csdomain}:")
+else:
+        print("Overall results:")
+evaluate(batch_size_candidates=2**15, cmask=cmask)

@@ -79,6 +79,11 @@ python test.py jobname=test-script checkpoint=logs/dvi2-clews/checkpoint_best.ck
 python test.py jobname=test-script checkpoint=logs/dvi2fm_light-clews/checkpoint_best.ckpt nnodes=1 ngpus=4 redux=bpwr-10 maxlen=300
 ```
 
+#### Cross-Domain Testing
+We recommend to run overall tests first. Then, set `domain` and `domain_mode` or `qsdomain` and `csdomain` respectively:
+```python test.py jobname=test-script checkpoint=logs/dvi2-clews/checkpoint_best.ckpt nnodes=1 ngpus=4 redux=bpwr-10
+
+
 ## License
 
 The code in this repository is released under the MIT license as found in the [LICENSE file](LICENSE).

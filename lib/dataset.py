@@ -76,6 +76,7 @@ class Dataset(torch.utils.data.Dataset):
         self.versions = []
         for vers in self.clique.values():
             self.versions += vers
+        self.info = {k: v for (k, v) in self.info.items() if k in self.versions}
         # Prints
         if self.verbose:
             print(
@@ -207,21 +208,18 @@ class CrossDomainDataset(Dataset):
                  fullsongs=False, 
                  checks=True, 
                  verbose=False, 
-                 qsdomain=None, 
-                 csdomain=None,
                  limit_cliques=None):
         super().__init__(conf, split, augment, fullsongs, checks, verbose, limit_cliques)
         # Cross-domain specific attributes
         assert domain is not None, "Domain must be specified for CrossDomainDataset"
-        assert (qsdomain is not None and csdomain is not None) or (qsdomain is None and csdomain is None), "Must either specify both query and candidate domains or neither"
         self.domain = domain
         self.init_domain_labels()
-        self.qsdomain = qsdomain
-        self.csdomain = csdomain
-        # TODO: add filtering based on qsdomain and csdomain
         if self.verbose:
-            print(f"Cross-domain: {self.cross_domain}, Query domain: {self.qsdomain}, Candidate domain: {self.csdomain}")
+            print(f"Cross-domain: {self.domain}")
 
+    def get_all_multihot(self):
+        return torch.stack(list(self.aux_processed.values()))
+    
     def get_filter_mask(self, domain_label):
         """
         Filter versions based on query and candidate domains.
@@ -277,7 +275,7 @@ class CrossDomainDataset(Dataset):
     @staticmethod
     def ints2multihot(items: list, n: int) -> torch.Tensor:
         """Encodes a list of integers as a multi-hot tensor."""
-        items = torch.tensor(items)
+        items = torch.tensor(list(set(items)))
         if len(items) > 0:
             ids = torch.sum(F.one_hot(items, n), axis=0)
         else:
@@ -316,10 +314,72 @@ class CrossDomainDataset(Dataset):
                     ids.append(self.label2ids[NAN_LABEL])  # -1 for unknown labels
             tlabels_processed.append(self.ints2multihot(ids, len(self.label2ids))) 
         # always keep multi-hot tensor
-        self.domains_processed = tlabels_processed        
+        self.domains_processed = torch.stack(tlabels_processed)        
 
         # transform
         item_keys = [v["id"] for v in self.info.values()]
         for idx, item_key in tqdm(enumerate(item_keys), desc="Transforming auxiliary data...", total=len(item_keys)):
             self.aux_processed[item_key] = tlabels_processed[idx]
         print(f"  Domain labels processed: {len(self.aux_processed)} items, {len(self.label2ids)} classes")
+
+    def filter_by_domain_pair(self, mode="same", qslabel=None, cslabel=None):
+        doms = self.domains_processed  # [N, D] multi-hot
+        assert mode in ["same", "overlap", "disjoint", "pair", "all"], f"Invalid mode: {mode}"
+        if mode == "pair":
+            assert qslabel is not None and cslabel is not None, "qslabel and cslabel must be specified for 'pair' mode"
+            q_idx = self.label2ids[qslabel]
+            c_idx = self.label2ids[cslabel]
+            assert q_idx is not None and c_idx is not None, f"Labels {qslabel} and {cslabel} must be in label2ids"
+        else:
+            assert qslabel is None and cslabel is None, "qslabel and cslabel must be None for modes other than 'pair'"
+        
+        if mode == "same":
+            mask = (doms == doms).all(dim=1)
+        elif mode == "overlap":
+            mask = (doms.unsqueeze(1) & doms.unsqueeze(0)).any(dim=-1).any(dim=1)
+        elif mode == "disjoint":
+            mask = ~((doms.unsqueeze(1) & doms.unsqueeze(0)).any(dim=-1)).any(dim=1)
+        elif mode == "pair":
+            mask = (doms[:, q_idx] | doms[:, c_idx]).bool()
+        else:
+            mask = torch.ones(len(self), dtype=torch.bool)
+
+        return mask
+    
+    def get_domain_mask(
+        self,
+        mode: str = "same",
+        qslabel: str = None,
+        cslabel: str = None
+    ) -> torch.BoolTensor:
+        """
+        Returns a [Q, C] boolean mask where Q is the number of queries and C is the number of candidates.
+        """
+        x = self.domains_processed  # [N, D] multi-hot
+        assert mode in ["same", "overlap", "disjoint", "pair", "all"], f"Invalid mode: {mode}"
+       
+        if mode == "same":
+            # Exact multihot vector match between queries and candidates
+            mask =  (x.unsqueeze(1) == x.unsqueeze(0)).all(dim=2).bool()
+
+        elif mode == "overlap":
+            # At least one shared domain label
+            mask = ((x @ x.T) & ~(x.unsqueeze(1) == x.unsqueeze(0)).all(dim=2)).bool()
+
+        elif mode == "disjoint":
+            # No shared domain labels
+            mask = ~(x[:, None, :] & x[None, :, :]).any(dim=-1)
+
+        elif mode == "pair":
+            assert qslabel is not None and cslabel is not None, "qslabel and cslabel must be specified for 'pair' mode"
+            q_idx = self.label2ids[qslabel]
+            c_idx = self.label2ids[cslabel]
+            q_x = x[:, q_idx]  # (N, |q_idx|)
+            c_x = x[:, c_idx]  # (N, |c_idx|)
+
+            # Asymmetric overlap mask: q_x[i] vs c_x[j]
+            mask = q_x.bool().unsqueeze(0) & c_x.bool().unsqueeze(1)  # (N, N), bool # (N, N) mask
+        else:
+            raise ValueError(f"Unknown mode '{mode}'. Must be one of: same, overlap, disjoint, pair.")
+
+        return mask  # shape: [Q, C]

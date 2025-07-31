@@ -38,7 +38,7 @@ def report(
     ncols=120,
     fmt=None,
     fmt_default={
-        "N": "d",
+        "nQs": "d",
         "loss": ".3f",
         "l_main": ".3f",
         "MAP": "5.3f",
@@ -47,8 +47,14 @@ def report(
         "m_MR1": "7.1f",
         "ARP": "5.2f",
         "m_ARP": "5.2f",
+        "nCs_median": ".2f",   # median count — float with 2 decimals looks good
+        "nCs_mean": ".2f",     # mean count as float with 2 decimals
+        "nCs_std": ".2f",      # already given
+        "nCs_min": "d",        # min count as integer
+        "nCs_max": "d",        # max count as integer
     },
     fmt_base=".3f",
+    sep=", ",
     clean_line=True,
 ):
     if clean_line:
@@ -62,7 +68,7 @@ def report(
     for i, key in enumerate(keys):
         value = dict[key]
         if i > 0:
-            s += ",  "
+            s += sep
         s += key + " = "
         if type(value) == str:
             s += value
@@ -75,8 +81,7 @@ def report(
                 ff = fmt_base
             aux = "{:" + ff + "}"
             s += aux.format(value)
-    return s
-
+    return s 
 
 ###################################################################################################
 
