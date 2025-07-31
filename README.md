@@ -80,8 +80,7 @@ python test.py jobname=test-script checkpoint=logs/dvi2fm_light-clews/checkpoint
 ```
 
 #### Cross-Domain Testing
-We recommend to run overall tests first. Then, set `domain` and `domain_mode` or `qsdomain` and `csdomain` respectively:
-```python test.py jobname=test-script checkpoint=logs/dvi2-clews/checkpoint_best.ckpt nnodes=1 ngpus=4 redux=bpwr-10
+We recommend to run overall tests first. Then, set `domain` and `domain_mode` or `domain` and `qsdomain`, `csdomain` respectively. 
 
 
 ## License
