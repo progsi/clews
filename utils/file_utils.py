@@ -5,6 +5,8 @@ import json
 import h5py
 import torch
 
+from lib.tensor_ops import can_reduce_windows
+
 
 def load_txt(fn):
     with open(fn, "r") as fh:
@@ -89,7 +91,14 @@ def load_from_hdf5(file_path):
         query_m = torch.from_numpy(f["m"][:])
         hop = f.attrs.get("qhop", None)
     return query_c, query_i, query_z, query_m, hop
-        
+
+def can_use_hdf5(file_path, new_hop):
+    if os.path.exists(file_path):
+        with h5py.File(file_path, "r") as f:
+            hop = f.attrs.get("qhop", None)
+        return can_reduce_windows(hop, new_hop)
+    return False
+     
 def load_from_h5_by_index(h5_path, index, device="cuda"):
     with h5py.File(h5_path, "r") as f:
         z = torch.tensor(f["z"][index : index + 1]).float().to(device)

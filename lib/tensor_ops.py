@@ -375,19 +375,24 @@ def distance_tensor_redux(dist, redux, mask=None, squeeze=True, eps=1e-7, inf=1e
 
 ###################################################################################################
 
-def reduce_windows_if_possible(tensor, old_hop, new_hop, dim=1):
-    """Reduces the window dimension (axis=1) of a (N, W, D) tensor if new_hop > old_hop."""
-    if new_hop <= old_hop:
-        # Can't reduce — already using finer or same granularity
-        raise ValueError(f"Cannot reduce windows: new_hop ({new_hop}) <= old_hop ({old_hop})")
+def can_reduce_windows(old_hop, new_hop):
+    if old_hop == new_hop:
+        return True
+    if old_hop is None or new_hop is None:
+        return False
+    return new_hop > old_hop and (new_hop % old_hop == 0)
 
-    ratio = new_hop / old_hop
-    if not ratio.is_integer():
-        raise ValueError(f"new_hop ({new_hop}) must be an integer multiple of old_hop ({old_hop})")
-    
-    step = int(ratio)
-    indices = torch.arange(0, tensor.size(dim), step, device=tensor.device)
-    return torch.index_select(tensor, dim, indices)
+def reduce_windows(tensor, old_hop, new_hop, dim=1):
+    """Reduces the window dimension (axis=1) of a (N, W, D) tensor if new_hop > old_hop."""
+    if can_reduce_windows(old_hop, new_hop):
+        ratio = new_hop / old_hop
+        if ratio == 1:
+            return tensor
+        step = int(ratio)
+        indices = torch.arange(0, tensor.size(dim), step, device=tensor.device)
+        return torch.index_select(tensor, dim, indices)
+    else:
+        raise ValueError(f"Cannot reduce windows from {old_hop} to {new_hop}.")
 
 def all_gather_chunks(tensor, fabric, chunk_size=512):
     """

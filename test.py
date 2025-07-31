@@ -28,7 +28,7 @@ if "path_meta" not in args:
 if "partition" not in args:
     args.partition = "test"
 if "domain" not in args:
-    args.cross_domain = None
+    args.domain = None
 if "domain_mode" not in args:
     args.domain_mode = None
 if "qsdomain" not in args:
@@ -46,11 +46,11 @@ if "redux" not in args:  # distance reduction
 if "qslen" not in args:  # query shingle len
     args.qslen = None
 if "qshop" not in args:  # query shingle hop (default = every 5 sec)
-    args.qshop = 5
+    args.qshop = None
 if "cslen" not in args:  # candidate shingle len
     args.cslen = None
 if "cshop" not in args:  # candidate shingle hop (default = every 5 sec)
-    args.cshop = 5
+    args.cshop = None
 
 ###############################################################################
 
@@ -120,6 +120,7 @@ if args.domain is not None:
         fullsongs=True,
         verbose=fabric.is_global_zero,
         limit_cliques=args.limit_num,
+        checks=False, 
     )
     if args.domain_mode is not None:
         myprint(f"Using domain mode {args.domain_mode}...")
@@ -135,6 +136,7 @@ else:
         fullsongs=True,
         verbose=fabric.is_global_zero,
         limit_cliques=args.limit_num,
+        checks=False, 
     )
     cmask = None
 
@@ -152,14 +154,21 @@ dloader = fabric.setup_dataloaders(dloader)
 
 @torch.inference_mode()
 def extract_embeddings(shingle_len, shingle_hop, outpath, eps=1e-6):
-    shinglen, shinghop = model.get_shingle_params()
-    if shingle_len is not None:
-        shinglen = shingle_len
-    if shingle_hop is not None:
-        shinghop = shingle_hop
+    # shinglen, shinghop = model.get_shingle_params()
+    # if shingle_len is not None:
+    #     shinglen = shingle_len
+    # if shingle_hop is not None:
+    #     shinghop = shingle_hop
 
     mxlen = int(args.maxlen * model.sr)
-    numshingles = int((mxlen - int(shinglen * model.sr)) / int(shinghop * model.sr))
+    if shingle_len is None and shingle_hop is None:
+        numshingles = 1
+    else:
+        if shingle_len is None:
+            shingle_len, _ = model.get_shingle_params()
+        elif shingle_hop is None:
+            _, shingle_hop = model.get_shingle_params()
+        numshingles = int((mxlen - int(shingle_len * model.sr)) / int(shingle_hop * model.sr))
 
     skipped = 0
     total_saved = 0
@@ -171,10 +180,11 @@ def extract_embeddings(shingle_len, shingle_hop, outpath, eps=1e-6):
             x = x[:, :mxlen]
 
         try:
+            xlen = int(x.size(1) / model.sr)
             z = model(
                 x,
-                shingle_len=int(x.size(1) / model.sr) if shinglen <= 0 else shinglen,
-                shingle_hop=int(0.99 * x.size(1) / model.sr) if shinghop <= 0 else shinghop,
+                shingle_len=xlen if (shingle_len is None or shingle_len <= 0) else shingle_len,
+                shingle_hop=xlen if (shingle_hop is None or shingle_hop <= 0) else shingle_hop,
             )
         except RuntimeError as e:
             if "CUDA out of memory" in str(e):
@@ -185,7 +195,7 @@ def extract_embeddings(shingle_len, shingle_hop, outpath, eps=1e-6):
             else:
                 raise
 
-        z = tops.force_length(z, 1 if shinglen <= 0 else numshingles, dim=1, pad_mode="zeros", cut_mode="start")
+        z = tops.force_length(z, numshingles, dim=1, pad_mode="zeros", cut_mode="start")
         m = z.abs().max(-1)[0] < eps
 
         # Move to CPU immediately
@@ -205,7 +215,7 @@ def extract_embeddings(shingle_len, shingle_hop, outpath, eps=1e-6):
                 "m": torch.cat(buffer["m"], dim=0),
             },
             batch_start=total_saved,
-            hop=shinghop
+            hop=shingle_hop
         )
         myprint(f"Saved checkpoint at batch {step + 1} → total {total_saved} samples")
 
@@ -234,7 +244,7 @@ def evaluate(batch_size_candidates=2**15, cmask=None):
             h5path_q, h5path_c = None
         
         expected_len = len(dloader)
-        if h5path_q is None or not os.path.isfile(h5path_q):
+        if h5path_q is None or not os.path.isfile(h5path_q) or not file_utils.can_use_hdf5(h5path_q, args.qshop):
             extract_embeddings(
                 args.qslen, args.qshop, outpath=h5path_q
             )
@@ -253,8 +263,8 @@ def evaluate(batch_size_candidates=2**15, cmask=None):
 
         if qhop != args.qshop:
             myprint(f"Reducing query windows from {qhop} to {args.qshop} seconds...")
-            query_z = tops.reduce_windows_if_possible(query_z, qhop, args.qshop, dim=1)
-            query_m = tops.reduce_windows_if_possible(query_m, qhop, args.qshop, dim=1)
+            query_z = tops.reduce_windows(query_z, qhop, args.qshop, dim=1)
+            query_m = tops.reduce_windows(query_m, qhop, args.qshop, dim=1)
 
         print(f"Having query embeddings of shape: {query_z.shape}")
             
@@ -272,7 +282,7 @@ def evaluate(batch_size_candidates=2**15, cmask=None):
                 query_m.clone(),
             )
         else:
-            if h5path_q is None or not os.path.isfile(h5path_c):
+            if h5path_q is None or not os.path.isfile(h5path_c) or not file_utils.can_use_hdf5(h5path_q, args.qshop):
                 extract_embeddings(
                     args.qslen, args.qshop, outpath=h5path_c
                 )
@@ -286,8 +296,8 @@ def evaluate(batch_size_candidates=2**15, cmask=None):
                 cand_m = cand_m[mask]
             if chop != args.cshop:
                 myprint(f"Reducing candidate windows from {qhop} to {args.qshop} seconds...")
-                query_z = tops.reduce_windows_if_possible(query_z, qhop, args.qshop, dim=1)
-                query_m = tops.reduce_windows_if_possible(query_m, qhop, args.qshop, dim=1)
+                query_z = tops.reduce_windows(query_z, qhop, args.qshop, dim=1)
+                query_m = tops.reduce_windows(query_m, qhop, args.qshop, dim=1)
             print(f"Having candidate embeddings of shape: {cand_z.shape}")
 
             cand_c = cand_c.int()
@@ -309,8 +319,9 @@ def evaluate(batch_size_candidates=2**15, cmask=None):
         my_queries = range(fabric.global_rank, len(query_z), fabric.world_size)
         step = 0
         for n in myprogbar(my_queries, desc=f"Retrieve (GPU {fabric.global_rank})", leave=True):
-            if cmask is not None and (cmask[n].sum() == 0) or ((query_c[n : n + 1].unsqueeze(1) == cand_c[cmask[n]]).sum() <= 1).item():
-                continue  # skip if no valid candidates
+            if cmask is not None:
+                if (cmask[n].sum() == 0) or ((query_c[n : n + 1].unsqueeze(1) == cand_c[cmask[n]]).sum() <= 1).item():
+                    continue  # skip if no valid or positive candidates
                 
             ap, r1, rpc = eval.compute(
                 model,
@@ -380,7 +391,7 @@ def evaluate(batch_size_candidates=2**15, cmask=None):
     myprint("Result:")
     myprint("  Avg --> " + print_utils.report(logdict_mean, clean_line=False))
     myprint("  c.i. -> " + print_utils.report(logdict_ci, clean_line=False))
-    myprint("  Stats -->\n" + print_utils.report(logdict_stats, sep="\n", clean_line=False))
+    myprint("  Stats -->" + print_utils.report(logdict_stats, sep="\n", clean_line=False))
     myprint("=" * 100)
 
 if args.domain is not None:
