@@ -154,11 +154,6 @@ dloader = fabric.setup_dataloaders(dloader)
 
 @torch.inference_mode()
 def extract_embeddings(shingle_len, shingle_hop, outpath, eps=1e-6):
-    # shinglen, shinghop = model.get_shingle_params()
-    # if shingle_len is not None:
-    #     shinglen = shingle_len
-    # if shingle_hop is not None:
-    #     shinghop = shingle_hop
 
     mxlen = int(args.maxlen * model.sr)
     if shingle_len is None and shingle_hop is None:
