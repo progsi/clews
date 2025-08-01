@@ -3,6 +3,7 @@ import os
 import importlib
 from omegaconf import OmegaConf
 import torch, math
+from datetime import timedelta
 from torch.utils.data.distributed import DistributedSampler
 
 from lightning import Fabric
@@ -63,7 +64,7 @@ fabric = Fabric(
     accelerator="gpu",
     devices=args.ngpus,
     num_nodes=args.nnodes,
-    strategy=DDPStrategy(broadcast_buffers=False),
+    strategy=DDPStrategy(broadcast_buffers=False, timeout=timedelta(milliseconds=18_000_000)),
     precision=args.precision,
 )
 fabric.launch()
@@ -307,12 +308,11 @@ def evaluate(batch_size_candidates=2**15, cmask=None):
         cand_m = tops.all_gather_chunks(cand_m.cpu(), fabric, chunk_size=1024)
 
         # Evaluate
-        aps = []
-        r1s = []
-        rpcs = []
-        ncands = []
         my_queries = range(fabric.global_rank, len(query_z), fabric.world_size)
         step = 0
+        total_saved = 0
+        buffer = {"clique": [], "index": [], "aps": [], "r1s": [], "rpcs": [], "ncands": []}
+        outpath = os.path.join(log_path, f"test_{test_subset}_measures_{fabric.global_rank}.h5")
         for n in myprogbar(my_queries, desc=f"Retrieve (GPU {fabric.global_rank})", leave=True):
             if cmask is not None:
                 if (cmask[n].sum() == 0) or ((query_c[n : n + 1].unsqueeze(1) == cand_c[cmask[n]]).sum() <= 1).item():
@@ -331,23 +331,37 @@ def evaluate(batch_size_candidates=2**15, cmask=None):
                 redux_strategy=args.redux,
                 batch_size_candidates=batch_size_candidates,
             )
-            aps.append(ap)
-            r1s.append(r1)
-            rpcs.append(rpc)
-            ncands.append(torch.sum(cmask[n], dtype=torch.int32) if cmask is not None else torch.tensor(len(cand_i)))
-            
-            if (step + 1) % 100 == 0 or step == len(my_queries) - 1:
-                # Convert to CPU tensors
-                print(f"\n  Metrics for {len(aps):,} queries on GPU {fabric.global_rank}: ")
-                print(f"    MAP: {torch.stack(aps).mean():.3f}")
-                print(f"    MR1: {torch.stack(r1s).mean():.3f}")
-                print(f"    ARP: {torch.stack(rpcs).mean():.3f}")
+
+            # Move to CPU immediately
+            buffer["clique"].append(query_i[n : n + 1].cpu())
+            buffer["index"].append(query_c[n : n + 1].cpu())
+            buffer["aps"].append(ap.cpu())
+            buffer["r1s"].append(r1.cpu())
+            buffer["rpcs"].append(rpc.cpu())
+            cur_ncands = torch.tensor([torch.sum(cmask[n], dtype=torch.int32)]) if cmask is not None else torch.tensor([len(cand_i)])
+            buffer["ncands"].append(cur_ncands.cpu())
+        
+            if outpath is not None and (step + 1) % 1000 == 0 or step == len(my_queries) - 1:
+                file_utils.save_to_hdf5(
+                    outpath,
+                    {
+                        "clique": torch.cat(buffer["clique"], dim=0),
+                        "index": torch.cat(buffer["index"], dim=0),
+                        "aps": torch.cat(buffer["aps"], dim=0),
+                        "r1s": torch.cat(buffer["r1s"], dim=0),
+                        "rpcs": torch.cat(buffer["rpcs"], dim=0),
+                        "ncands": torch.cat(buffer["ncands"], dim=0),
+                    },
+                    batch_start=total_saved,
+                    hop=args.qshop,
+                )
+                myprint(f"Saved measures at batch {step + 1}.")
             step += 1
-                    
-        aps = torch.stack(aps)
-        r1s = torch.stack(r1s)
-        rpcs = torch.stack(rpcs)
-        ncands = torch.stack(ncands)
+                       
+        aps = torch.stack(buffer["aps"])
+        r1s = torch.stack(buffer["r1s"])
+        rpcs = torch.stack(buffer["rpcs"])
+        ncands = torch.stack(buffer["ncands"])
 
         # Collect measures from all GPUs + collapse to batch dim
         fabric.barrier()
@@ -397,4 +411,5 @@ if args.domain is not None:
         print(f"Results for {args.qsdomain}-to-{args.csdomain}:")
 else:
         print("Overall results:")
+
 evaluate(batch_size_candidates=2**15, cmask=cmask)
