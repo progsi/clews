@@ -53,6 +53,11 @@ if "cslen" not in args:  # candidate shingle len
 if "cshop" not in args:  # candidate shingle hop (default = every 5 sec)
     args.cshop = None
 
+# Set save path
+test_subset = args.jobname.split("-")[-1]
+save_path = os.path.join(log_path, test_subset)
+os.makedirs(save_path, exist_ok=True)
+
 ###############################################################################
 
 # Init pytorch/Fabric
@@ -230,17 +235,16 @@ def evaluate(batch_size_candidates=2**15, cmask=None):
         need_seperate_candidates = not args.cslen == args.qslen or not args.cshop == args.qshop
         # Extract embeddings
         if args.jobname is not None:
-            test_subset = args.jobname.split("-")[-1]
-            h5path_q = os.path.join(log_path, f"test_{test_subset}.h5")
+            h5path_q = os.path.join(save_path, f"embeddingsq_hs{args.qshop}ws{args.qslen}.h5")
             if need_seperate_candidates:
-                h5path_c = os.path.join(log_path, f"test_{test_subset}2.h5")
+                h5path_c = os.path.join(save_path, f"embeddingsc_{test_subset}_hs{args.cshop}ws{args.cslen}.h5")
             else:
                 h5path_c = None
         else:
             h5path_q, h5path_c = None
         
         expected_len = len(dloader)
-        if h5path_q is None or not os.path.isfile(h5path_q) or not file_utils.can_use_hdf5(h5path_q, args.qshop):
+        if h5path_q is None or not os.path.isfile(h5path_q):
             extract_embeddings(
                 args.qslen, args.qshop, outpath=h5path_q
             )
@@ -278,7 +282,7 @@ def evaluate(batch_size_candidates=2**15, cmask=None):
                 query_m.clone(),
             )
         else:
-            if h5path_q is None or not os.path.isfile(h5path_c) or not file_utils.can_use_hdf5(h5path_q, args.qshop):
+            if h5path_q is None or not os.path.isfile(h5path_c):
                 extract_embeddings(
                     args.qslen, args.qshop, outpath=h5path_c
                 )
@@ -312,7 +316,7 @@ def evaluate(batch_size_candidates=2**15, cmask=None):
         step = 0
         total_saved = 0
         buffer = {"clique": [], "index": [], "aps": [], "r1s": [], "rpcs": [], "ncands": []}
-        outpath = os.path.join(log_path, f"test_{test_subset}_measures_{fabric.global_rank}.h5")
+        outpath = os.path.join(save_path, f"measures_hs{args.qshop}ws{args.qslen}_{fabric.global_rank}.h5")
         for n in myprogbar(my_queries, desc=f"Retrieve (GPU {fabric.global_rank})", leave=True):
             if cmask is not None:
                 if (cmask[n].sum() == 0) or ((query_c[n : n + 1].unsqueeze(1) == cand_c[cmask[n]]).sum() <= 1).item():
