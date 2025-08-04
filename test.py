@@ -169,7 +169,7 @@ def extract_embeddings(shingle_len, shingle_hop, outpath, eps=1e-6):
             shingle_len, _ = model.get_shingle_params()
         elif shingle_hop is None:
             _, shingle_hop = model.get_shingle_params()
-        numshingles = int((mxlen - int(shingle_len * model.sr)) / int(shingle_hop * model.sr))
+        numshingles = 1 + int((mxlen - int(shingle_len * model.sr)) / int(shingle_hop * model.sr))
 
     skipped = 0
     total_saved = 0
@@ -260,7 +260,6 @@ def evaluate(batch_size_candidates=2**15, cmask=None):
             query_z = query_z[mask]
             query_m = query_m[mask]
         
-
         if qhop != args.qshop:
             myprint(f"Reducing query windows from {qhop} to {args.qshop} seconds...")
             query_z = tops.reduce_windows(query_z, qhop, args.qshop, dim=1)
