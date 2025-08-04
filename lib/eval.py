@@ -95,7 +95,7 @@ def compute(
                 queries_z[n : n + 1].float().to(device),
                 candidates_z.float().to(device),
                 qmask=queries_m[n : n + 1].to(device) if queries_m is not None else None,
-                cmask=candidates_m.to(device),
+                cmask=candidates_m.to(device) if candidates_m is not None else None,
                 redux_strategy=redux_strategy,
             ).squeeze(0)
         else:

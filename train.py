@@ -28,6 +28,9 @@ fn_ckpt_last = os.path.join(conf.path.logs, "checkpoint_last.ckpt")
 fn_ckpt_best = os.path.join(conf.path.logs, "checkpoint_best.ckpt")
 fn_ckpt_epoch = os.path.join(conf.path.logs, "checkpoint_$epoch$.ckpt")
 
+if "limit_num" not in args:
+    args.limit_num = None
+    
 # Init pytorch/Fabric
 torch.backends.cudnn.benchmark = True  # seems it is same speed as False?
 torch.backends.cudnn.deterministic = False
@@ -128,12 +131,14 @@ ds_train = dataset.Dataset(
     "train",
     augment=True,
     verbose=fabric.is_global_zero,
+    limit_cliques=args.limit_num,
 )
 ds_valid = dataset.Dataset(
     conf.data,
     "valid",
     augment=False,
     verbose=fabric.is_global_zero,
+    limit_cliques=args.limit_num,
 )
 assert conf.training.batchsize > 1
 dl_train = torch.utils.data.DataLoader(
