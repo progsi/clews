@@ -211,7 +211,7 @@ def extract_embeddings(shingle_len, shingle_hop, outpath, eps=1e-6):
     all_z = tops.all_gather_chunks(torch.cat(buffer["z"], dim=0), fabric, chunk_size=1024)
     all_m = tops.all_gather_chunks(torch.cat(buffer["m"], dim=0), fabric, chunk_size=1024)
     
-    if outpath is not None:
+    if fabric.global_rank == 0 and outpath is not None:
         file_utils.save_to_hdf5(
             outpath,
             {
