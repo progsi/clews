@@ -3,7 +3,8 @@ __pycache__/
 
 .vscode/
 .venv/
-myslurm/
+slurm/
+jobs/
 
 cache
 data
