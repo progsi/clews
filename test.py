@@ -55,7 +55,7 @@ if "cshop" not in args:  # candidate shingle hop (default = every 5 sec)
 
 # Set save path
 test_subset = args.jobname.split("-")[-1]
-save_path = os.path.join(log_path, test_subset)
+save_path = os.path.join(log_path, test_subset, f"hs{args.qshop}ws{args.qslen}")
 os.makedirs(save_path, exist_ok=True)
 
 ###############################################################################
@@ -206,14 +206,19 @@ def extract_embeddings(shingle_len, shingle_hop, outpath, eps=1e-6):
         buffer["m"].append(m.cpu())
 
     myprint(f"Skipped {skipped} items.")
+    all_clique = tops.all_gather_chunks(torch.cat(buffer["clique"], dim=0), fabric, chunk_size=1024)
+    all_index = tops.all_gather_chunks(torch.cat(buffer["index"], dim=0), fabric, chunk_size=1024)
+    all_z = tops.all_gather_chunks(torch.cat(buffer["z"], dim=0), fabric, chunk_size=1024)
+    all_m = tops.all_gather_chunks(torch.cat(buffer["m"], dim=0), fabric, chunk_size=1024)
+    
     if outpath is not None:
         file_utils.save_to_hdf5(
             outpath,
             {
-                "clique": torch.cat(buffer["clique"], dim=0),
-                "index": torch.cat(buffer["index"], dim=0),
-                "z": torch.cat(buffer["z"], dim=0),
-                "m": torch.cat(buffer["m"], dim=0),
+                "clique": all_clique,
+                "index": all_index,
+                "z": all_z,
+                "m": all_m,
             },
             batch_start=total_saved,
             hop=shingle_hop
@@ -235,9 +240,9 @@ def evaluate(batch_size_candidates=2**15, cmask=None):
         need_seperate_candidates = not args.cslen == args.qslen or not args.cshop == args.qshop
         # Extract embeddings
         if args.jobname is not None:
-            h5path_q = os.path.join(save_path, f"embeddingsq_hs{args.qshop}ws{args.qslen}.h5")
+            h5path_q = os.path.join(save_path, f"embeddings_q.h5")
             if need_seperate_candidates:
-                h5path_c = os.path.join(save_path, f"embeddingsc_{test_subset}_hs{args.cshop}ws{args.cslen}.h5")
+                h5path_c = os.path.join(save_path, f"embeddings_c.h5")
             else:
                 h5path_c = None
         else:
@@ -315,7 +320,7 @@ def evaluate(batch_size_candidates=2**15, cmask=None):
         step = 0
         total_saved = 0
         buffer = {"clique": [], "index": [], "aps": [], "r1s": [], "rpcs": [], "ncands": []}
-        outpath = os.path.join(save_path, f"measures_hs{args.qshop}ws{args.qslen}_{fabric.global_rank}.h5")
+        outpath = os.path.join(save_path, f"measures_{fabric.global_rank}.h5")
         for n in myprogbar(my_queries, desc=f"Retrieve (GPU {fabric.global_rank})", leave=True):
             if cmask is not None:
                 if (cmask[n].sum() == 0) or ((query_c[n : n + 1].unsqueeze(1) == cand_c[cmask[n]]).sum() <= 1).item():
