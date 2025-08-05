@@ -8,7 +8,7 @@ path:
   cache: "cache/"
   logs: "logs/"
   audio: "data/audio/"
-  meta: "cache/metadata-dvi2.pt"
+  meta: "cache/metadata-dvi2fm_light.pt"
 
 fabric:
   nnodes: 1
