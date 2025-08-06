@@ -253,8 +253,18 @@ def evaluate(batch_size_candidates=2**15, cmask=None):
             extract_embeddings(
                 args.qslen, args.qshop, outpath=h5path_q
             )
-            
-        query_c, query_i, query_z, query_m, qhop = file_utils.load_from_hdf5(h5path_q)
+        
+        if fabric.global_rank == 0:
+            query_c, query_i, query_z, query_m, qhop = file_utils.load_from_hdf5(h5path_q)
+        else:
+            query_c = query_i = query_z = query_m = qhop = None
+
+        # Then broadcast from rank 0 to others (assuming Fabric, DDP, or Torch distributed)
+        query_c = fabric.broadcast(query_c, src=0)
+        query_i = fabric.broadcast(query_i, src=0)
+        query_z = fabric.broadcast(query_z, src=0)
+        query_m = fabric.broadcast(query_m, src=0)
+        
         if len(query_i) < expected_len:
             myprint(f"Warning: expected {expected_len} queries, got {len(query_i)}")
         elif len(query_i) > expected_len:
@@ -363,7 +373,7 @@ def evaluate(batch_size_candidates=2**15, cmask=None):
                     batch_start=total_saved,
                     hop=args.qshop,
                 )
-                myprint(f"Saved measures at batch {step + 1}.")
+                myprint(f"MAP {torch.stack(buffer['aps']).mean().item():.3f}; MR1 {torch.stack(buffer['r1s']).mean().item():.3f}. Saved measures at batch {step + 1}.")
             step += 1
                        
         aps = torch.stack(buffer["aps"])
