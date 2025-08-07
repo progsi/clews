@@ -55,7 +55,8 @@ if "cshop" not in args:  # candidate shingle hop (default = every 5 sec)
 
 # Set save path
 test_subset = args.jobname.split("-")[-1]
-save_path = os.path.join(log_path, test_subset, f"hs{args.qshop}ws{args.qslen}")
+sub_path = f"hs{args.qshop}ws{args.qslen}" if not (args.qslen is None or args.qshop is None) else "full_track"
+save_path = os.path.join(log_path, test_subset, sub_path)
 os.makedirs(save_path, exist_ok=True)
 
 ###############################################################################
@@ -210,6 +211,7 @@ def extract_embeddings(shingle_len, shingle_hop, outpath, eps=1e-6):
     all_index = tops.all_gather_chunks(torch.cat(buffer["index"], dim=0), fabric, chunk_size=1024)
     all_z = tops.all_gather_chunks(torch.cat(buffer["z"], dim=0), fabric, chunk_size=1024)
     all_m = tops.all_gather_chunks(torch.cat(buffer["m"], dim=0), fabric, chunk_size=1024)
+    print("Gathered embeddings of shape:", all_z.shape)
     
     if fabric.global_rank == 0 and outpath is not None:
         file_utils.save_to_hdf5(

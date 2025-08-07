@@ -63,7 +63,7 @@ def load_audio(
     else:
         try:
             x, sr = load()
-        except:
+        except Exception as e:
             print("\nEnWARNING: Could not load " + filename + f" due to {e}", flush=True)
             print(start, length, flush=True)
             x, sr = load()
