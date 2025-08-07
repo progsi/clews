@@ -10,15 +10,14 @@ def myprint(s, end="\n", doit=True, flush=True):
         print(s, end=end, flush=flush)
 
 def myprogbar(iterator, desc=None, doit=True, ncols=80, ascii=True, leave=True):
-    is_tty = sys.stdout.isatty()
     return tqdm(
         iterator,
         desc=desc,
         ascii=ascii,
         ncols=ncols,
-        disable=not (doit and is_tty),
+        disable=not doit,
         leave=leave,
-        file=sys.stdout if is_tty else None,
+        file=sys.stdout,
         mininterval=0.2,
         maxinterval=2,
     )
