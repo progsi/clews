@@ -73,10 +73,16 @@ class Dataset(torch.utils.data.Dataset):
         for i, cl in enumerate(self.clique.keys()):
             self.clique2id[cl] = offset + i
         # Get idx2version
-        self.versions = []
-        for vers in self.clique.values():
-            self.versions += vers
-        self.info = {k: v for (k, v) in self.info.items() if k in self.versions}
+        versions = set()
+        for clique, vers in self.clique.items():
+            if not clique in vers[0]:
+                vers = [clique + ":" + v for v in vers]
+            versions.update(vers)
+
+        # Keep versions as list if you need the list form
+        self.versions = list(versions)
+        self.info = {k: v for k, v in self.info.items() if k in versions}
+       
         # Prints
         if self.verbose:
             print(
@@ -320,7 +326,7 @@ class CrossDomainDataset(Dataset):
         item_keys = [v["id"] for v in self.info.values()]
         for idx, item_key in tqdm(enumerate(item_keys), desc="Transforming auxiliary data...", total=len(item_keys)):
             self.aux_processed[item_key] = tlabels_processed[idx]
-        print(f"  Domain labels processed: {len(self.aux_processed)} items, {len(self.label2ids)} classes")
+        print(f"  Domain labels processed: {len(self.aux_processed):,} items, {len(self.label2ids)} classes")
 
     def filter_by_domain_pair(self, mode="same", qslabel=None, cslabel=None):
         doms = self.domains_processed  # [N, D] multi-hot

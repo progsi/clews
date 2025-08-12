@@ -1,18 +1,15 @@
+#!/bin/bash
+
 # ===== Parse CLI args =====
-DATASET_TRAIN=$1
-DATASET_TEST=$2
-MODEL=$3
+JOBNAME=$1
+DATASET_TRAIN=$2
+DATASET_TEST=$3
+MODEL=$4
 
 if [[ -z "$DATASET_TRAIN" || -z "$MODEL" || -z "$DATASET_TEST" ]]; then
   echo "Usage: $0 <DATASET_TRAIN> <DATASET_TEST> <MODEL> [NGPUS=1] [PARTITION=gpu] [NNODES=1]"
   exit 1
 fi
-
-# ===== Paths =====
-MODELSUB="${DATASET_TRAIN}-${MODEL}"
-JOBNAME="test-${MODELSUB}-on-${DATASET_TEST}"
-LOGDIR="logs/${DATASET_TRAIN}-${MODEL}/${DATASET_TEST}/full_track/slurm/"
-mkdir -p "$LOGDIR"
 
 python test.py jobname=$JOBNAME checkpoint=logs/${MODELSUB}/checkpoint_best.ckpt conf=config/${MODELSUB}.yaml path_audio=data/audio path_meta=cache/metadata-${DATASET_TEST}.pt qsdomain=studio csdomain=acoustic
 python test.py jobname=$JOBNAME checkpoint=logs/${MODELSUB}/checkpoint_best.ckpt conf=config/${MODELSUB}.yaml path_audio=data/audio path_meta=cache/metadata-${DATASET_TEST}.pt qsdomain=studio csdomain=background

@@ -343,7 +343,9 @@ def evaluate(batch_size_candidates=2**15, cmask=None):
 
         for n in myprogbar(my_queries, desc=f"Retrieve (GPU {fabric.global_rank})", leave=True):
             if cmask is not None:
-                if (cmask[n].sum() == 0) or ((query_c[n : n + 1].unsqueeze(1) == cand_c[cmask[n]]).sum() <= 1).item():
+                has_candidates = (cmask[n].sum() == 0).item()
+                has_positives = ((query_c[n : n + 1].unsqueeze(1) == cand_c[cmask[n]]).sum() <= 1).item()
+                if not has_candidates or not has_positives:
                     continue  # skip if no valid or positive candidates
                 
             ap, r1, rpc = eval.compute(
