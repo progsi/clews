@@ -80,7 +80,7 @@ python test.py jobname=test-script checkpoint=logs/dvi2fm_light-clews/checkpoint
 ```
 
 #### Cross-Domain Testing
-We recommend to run overall tests first. Then, set `domain` and `domain_mode` or `domain` and `qsdomain`, `csdomain` respectively. 
+We recommend to run overall tests first. Then, set `domain` and `domain_mode` or `domain` and `qsdomain`, `csdomain` respectively. In the script `test_conceptwise.sh` we show an example.
 
 
 ## License

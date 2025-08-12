@@ -356,7 +356,7 @@ class CrossDomainDataset(Dataset):
         Returns a [Q, C] boolean mask where Q is the number of queries and C is the number of candidates.
         """
         x = self.domains_processed  # [N, D] multi-hot
-        assert mode in ["same", "overlap", "disjoint", "pair", "all"], f"Invalid mode: {mode}"
+        assert mode in ["same", "overlap", "disjoint", "pair"], f"Invalid mode: {mode}"
        
         if mode == "same":
             # Exact multihot vector match between queries and candidates
