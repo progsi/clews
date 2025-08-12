@@ -50,6 +50,11 @@ def report(
         "nCs_std": ".2f",      # already given
         "nCs_min": "d",        # min count as integer
         "nCs_max": "d",        # max count as integer
+        "nRel_median": ".2f",   # median count — float with 2 decimals looks good
+        "nRel_mean": ".2f",     # mean count as float with 2 decimals
+        "nRel_std": ".2f",      # already given
+        "nRel_min": "d",        # min count as integer
+        "nRel_max": "d",        # max count as integer
     },
     fmt_base=".3f",
     sep=", ",

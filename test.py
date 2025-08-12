@@ -335,7 +335,7 @@ def evaluate(batch_size_candidates=2**15, cmask=None):
         my_queries = range(fabric.global_rank, len(query_z), fabric.world_size)
         step = 0
         total_saved = 0
-        buffer = {"clique": [], "index": [], "aps": [], "r1s": [], "rpcs": [], "ncands": []}
+        buffer = {"clique": [], "index": [], "aps": [], "r1s": [], "rpcs": [], "ncands": [], "nrel": []}
         if cmask is None:
             outpath = os.path.join(save_path, f"measures_{fabric.global_rank}.h5")
         else:
@@ -343,8 +343,8 @@ def evaluate(batch_size_candidates=2**15, cmask=None):
 
         for n in myprogbar(my_queries, desc=f"Retrieve (GPU {fabric.global_rank})", leave=True):
             if cmask is not None:
-                has_candidates = (cmask[n].sum() == 0).item()
-                has_positives = ((query_c[n : n + 1].unsqueeze(1) == cand_c[cmask[n]]).sum() <= 1).item()
+                has_candidates = (cmask[n].sum() > 0).item()
+                has_positives = ((query_c[n : n + 1].unsqueeze(1) == cand_c[cmask[n]]).sum() >= 2).item()
                 if not has_candidates or not has_positives:
                     continue  # skip if no valid or positive candidates
                 
@@ -370,7 +370,7 @@ def evaluate(batch_size_candidates=2**15, cmask=None):
             buffer["rpcs"].append(rpc.cpu())
             cur_ncands = torch.tensor([torch.sum(cmask[n], dtype=torch.int32)]) if cmask is not None else torch.tensor([len(cand_i)])
             buffer["ncands"].append(cur_ncands.cpu())
-        
+            buffer["nrel"].append(torch.tensor([torch.sum(query_c[n] == cand_c[cmask[n]]).item()]).cpu())
             if outpath is not None and (step + 1) % 1000 == 0 or step == len(my_queries) - 1:
                 file_utils.save_to_hdf5(
                     outpath,
@@ -381,25 +381,27 @@ def evaluate(batch_size_candidates=2**15, cmask=None):
                         "r1s": torch.cat(buffer["r1s"], dim=0),
                         "rpcs": torch.cat(buffer["rpcs"], dim=0),
                         "ncands": torch.cat(buffer["ncands"], dim=0),
+                        "nrel": torch.cat(buffer["nrel"], dim=0)
                     },
                     batch_start=total_saved,
                     hop=args.qshop,
                 )
                 myprint(f"MAP {torch.stack(buffer['aps']).mean().item():.3f}; MR1 {torch.stack(buffer['r1s']).mean().item():.3f}. Saved measures at batch {step + 1}.")
             step += 1
-                       
+              
         aps = torch.stack(buffer["aps"])
         r1s = torch.stack(buffer["r1s"])
         rpcs = torch.stack(buffer["rpcs"])
         ncands = torch.stack(buffer["ncands"])
-
+        nrel = torch.stack(buffer["nrel"])
         # Collect measures from all GPUs + collapse to batch dim
         fabric.barrier()
         aps = tops.all_gather_chunks(aps.cpu(), fabric, chunk_size=1024)
         r1s = tops.all_gather_chunks(r1s.cpu(), fabric, chunk_size=1024)
         rpcs = tops.all_gather_chunks(rpcs.cpu(), fabric, chunk_size=1024)
         ncands = tops.all_gather_chunks(ncands.cpu(), fabric, chunk_size=1024)
-
+        nrel = tops.all_gather_chunks(nrel.cpu(), fabric, chunk_size=1024)
+        
     ###############################################################################
 
     # Print
@@ -414,12 +416,18 @@ def evaluate(batch_size_candidates=2**15, cmask=None):
         "nQs": len(aps), 
     }
     if cmask is not None:
+        # stats about number of candidates 
         logdict_stats["nCs_median"] = ncands.float().median().int().item()
-        logdict_stats["nCs_mean"] = ncands.float().median().item()
-        logdict_stats["nCs_std"] = ncands.float().median().item()
-        logdict_stats["nCs_min"] = ncands.float().median().int().item()
-        logdict_stats["nCs_max"] = ncands.float().median().int().item()
-
+        logdict_stats["nCs_mean"] = ncands.float().mean().item()
+        logdict_stats["nCs_std"] = ncands.float().std().item()
+        logdict_stats["nCs_min"] = ncands.float().min().int().item()
+        logdict_stats["nCs_max"] = ncands.float().max().int().item()
+        # stats about number of relevant candidates
+        logdict_stats["nRel_median"] = nrel.float().median().int().item()
+        logdict_stats["nRel_mean"] = nrel.float().mean().item()
+        logdict_stats["nRel_std"] = nrel.float().std().item()
+        logdict_stats["nRel_min"] = nrel.float().min().int().item()
+        logdict_stats["nRel_max"] = nrel.float().max().int().item()
     logdict_ci = {
         # confidence intervals for evaluation measures
         "MAP": 1.96 * aps.std() / math.sqrt(len(aps)),
@@ -430,7 +438,7 @@ def evaluate(batch_size_candidates=2**15, cmask=None):
     myprint("Result " + eval_name)
     myprint("  Avg --> " + print_utils.report(logdict_mean, clean_line=False))
     myprint("  c.i. -> " + print_utils.report(logdict_ci, clean_line=False))
-    myprint("  Stats -->" + print_utils.report(logdict_stats, sep="\n", clean_line=False))
+    myprint("  Stats\n" + print_utils.report(logdict_stats, sep="\n", clean_line=False))
     myprint("=" * 100)
 
 if args.domain is not None:
