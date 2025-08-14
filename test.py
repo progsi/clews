@@ -12,6 +12,9 @@ from lightning.fabric.strategies import DDPStrategy
 from lib import eval, dataset
 from lib import tensor_ops as tops
 from utils import pytorch_utils, print_utils, file_utils
+import torch
+import os
+
 
 # --- Get arguments (and set defaults) --- Basic ---
 args = OmegaConf.from_cli()
@@ -150,15 +153,15 @@ else:
     cmask = None
     eval_name = ""
 
+sampler = DistributedSampler(dset, num_replicas=fabric.world_size, rank=fabric.global_rank, shuffle=False)
 dloader = torch.utils.data.DataLoader(
     dset,
     batch_size=1,
-    shuffle=False,
+    sampler=sampler,
     num_workers=8,
     drop_last=False,
     pin_memory=False,
 )
-dloader = fabric.setup_dataloaders(dloader)
 
 ###############################################################################
 
@@ -242,6 +245,7 @@ def extract_embeddings(shingle_len, shingle_hop, outpath, eps=1e-6):
     
 ###############################################################################
 
+
 def evaluate(batch_size_candidates=2**15, cmask=None):
     # Let's go
     with torch.inference_mode():
@@ -266,10 +270,6 @@ def evaluate(batch_size_candidates=2**15, cmask=None):
         
         # let first GPU load the embeddings and send to other GPUs
         query_c, query_i, query_z, query_m, qhop = file_utils.load_from_hdf5(outp_embs_q)
-        query_c = tops.all_gather_chunks(query_c.cpu(), fabric, chunk_size=1024)
-        query_i = tops.all_gather_chunks(query_i.cpu(), fabric, chunk_size=1024)
-        query_z = tops.all_gather_chunks(query_z.cpu(), fabric, chunk_size=1024)
-        query_m = tops.all_gather_chunks(query_m.cpu(), fabric, chunk_size=1024)
         
         if len(query_i) < expected_len:
             myprint(f"Warning: expected {expected_len} queries, got {len(query_i)}")
@@ -326,11 +326,15 @@ def evaluate(batch_size_candidates=2**15, cmask=None):
         
         # Collect candidates from all GPUs + collapse to batch dim
         fabric.barrier()
-        cand_c = tops.all_gather_chunks(cand_c.cpu(), fabric, chunk_size=1024)
-        cand_i = tops.all_gather_chunks(cand_i.cpu(), fabric, chunk_size=1024)
-        cand_z = tops.all_gather_chunks(cand_z.cpu(), fabric, chunk_size=1024)
-        cand_m = tops.all_gather_chunks(cand_m.cpu(), fabric, chunk_size=1024)
-
+        cand_c = fabric.all_gather(cand_c)
+        cand_i = fabric.all_gather(cand_i)
+        cand_z = fabric.all_gather(cand_z)
+        cand_m = fabric.all_gather(cand_m)
+        cand_c = torch.cat(torch.unbind(cand_c, dim=0), dim=0)
+        cand_i = torch.cat(torch.unbind(cand_i, dim=0), dim=0)
+        cand_z = torch.cat(torch.unbind(cand_z, dim=0), dim=0)
+        cand_m = torch.cat(torch.unbind(cand_m, dim=0), dim=0)
+        
         # Evaluate
         my_queries = range(fabric.global_rank, len(query_z), fabric.world_size)
         step = 0
@@ -397,11 +401,16 @@ def evaluate(batch_size_candidates=2**15, cmask=None):
         nrel = torch.stack(buffer["nrel"])
         # Collect measures from all GPUs + collapse to batch dim
         fabric.barrier()
-        aps = tops.all_gather_chunks(aps.cpu(), fabric, chunk_size=1024)
-        r1s = tops.all_gather_chunks(r1s.cpu(), fabric, chunk_size=1024)
-        rpcs = tops.all_gather_chunks(rpcs.cpu(), fabric, chunk_size=1024)
-        ncands = tops.all_gather_chunks(ncands.cpu(), fabric, chunk_size=1024)
-        nrel = tops.all_gather_chunks(nrel.cpu(), fabric, chunk_size=1024)
+        aps = fabric.all_gather(aps)
+        r1s = fabric.all_gather(r1s)
+        rpcs = fabric.all_gather(rpcs)
+        ncands = fabric.all_gather(ncands)
+        nrel = fabric.all_gather(nrel)   
+        aps = torch.cat(torch.unbind(aps, dim=0), dim=0)
+        r1s = torch.cat(torch.unbind(r1s, dim=0), dim=0)
+        rpcs = torch.cat(torch.unbind(rpcs, dim=0), dim=0)
+        ncands = torch.cat(torch.unbind(ncands, dim=0), dim=0)
+        nrel = torch.cat(torch.unbind(nrel, dim=0), dim=0)
         
     ###############################################################################
 

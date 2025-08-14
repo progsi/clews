@@ -1,72 +1,8 @@
 import sys
 import torch
 
-from utils.file_utils import load_from_h5_by_index, load_from_h5_by_indices
 
 ###################################################################################################
-
-
-@torch.inference_mode()
-def compute_from_disk(
-    model,
-    h5_path_q,
-    index_q,
-    total_c,
-    redux_strategy=None,
-    h5_path_c=None,
-    batch_size_c=1024,
-    device="cuda",
-):
-    """
-    Compute retrieval metrics (AP, R@1, RPC) for a single query at index_q against all candidates,
-    loading candidates from disk in batches (to avoid OOM).
-    """
-
-    # Load single query
-    query_z, query_m, query_i, query_c = load_from_h5_by_index(h5_path_q, index_q)
-    # query_c = query_c.int()
-    # query_i = query_i.int()
-    # query_z = query_z.half()
-
-    # Default to self-retrieval if no candidate path is provided
-    candidate_path = h5_path_c or h5_path_q
-
-    dist_list = []
-    match_clique_all = []
-
-    model.eval()
-
-    for start in range(0, total_c, batch_size_c):
-        end = min(start + batch_size_c, total_c)
-
-        cand_z, cand_m, cand_i, cand_c = load_from_h5_by_indices(candidate_path, start, end)
-        # cand_c = cand_c.int()
-        # cand_i = cand_i.int()
-        # cand_z = cand_z.half()
-
-        dists = model.distances(
-            query_z.to(device),
-            cand_z.to(device),
-            qmask=query_m.to(device),
-            cmask=cand_m.to(device),
-            redux_strategy=redux_strategy,
-        ).squeeze(0)  # shape: (batch_size,)
-
-        match_clique = (cand_c == query_c.item())  # shape: (batch_size,)
-        match_query = (cand_i == query_i.item())   # shape: (batch_size,)
-
-        dist_list.append(torch.where(match_query, torch.inf, dists))
-        match_clique_all.append(torch.where(match_query, False, match_clique))
-
-    dist = torch.cat(dist_list, dim=0)
-    match_clique = torch.cat(match_clique_all, dim=0)
-
-    # Compute metrics
-    ap = average_precision(dist, match_clique)
-    r1 = rank_of_first_correct(dist, match_clique)
-    rpc = rank_percentile(dist, match_clique)
-
-    return ap.unsqueeze(0), r1.unsqueeze(0), rpc.unsqueeze(0)
 
 @torch.inference_mode()
 def compute(

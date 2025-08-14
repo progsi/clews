@@ -91,30 +91,3 @@ def load_from_hdf5(file_path):
         query_m = torch.from_numpy(f["m"][:])
         hop = f.attrs.get("qhop", None)
     return query_c, query_i, query_z, query_m, hop
-
-def can_use_hdf5(file_path, new_hop):
-    if os.path.exists(file_path):
-        with h5py.File(file_path, "r") as f:
-            hop = f.attrs.get("qhop", None)
-        return can_reduce_windows(hop, new_hop)
-    return False
-     
-def load_from_h5_by_index(h5_path, index, device="cuda"):
-    with h5py.File(h5_path, "r") as f:
-        z = torch.tensor(f["z"][index : index + 1]).float().to(device)
-        m = torch.tensor(f["m"][index : index + 1]).to(device) if "m" in f else None
-        i = torch.tensor(f["index"][index]).unsqueeze(0).to(device)
-        c = torch.tensor(f["clique"][index]).unsqueeze(0).to(device)
-    return z, m, i, c
-
-def load_from_h5_by_indices(h5_path, start, end, device="cuda"):
-    with h5py.File(h5_path, "r") as f:
-        z = torch.tensor(f["z"][start:end]).float().to(device)
-        m = torch.tensor(f["m"][start:end]).to(device) if "m" in f else None
-        i = torch.tensor(f["index"][start:end]).to(device)
-        c = torch.tensor(f["clique"][start:end]).to(device)
-    return z, m, i, c
-
-def get_length_from_h5(h5_path):
-    with h5py.File(h5_path, "r") as f:
-        return len(f["index"]) if "index" in f else 0
