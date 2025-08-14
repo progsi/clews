@@ -397,29 +397,60 @@ def reduce_windows(tensor, old_hop, new_hop, dim=1):
 def all_gather_chunks(tensor, fabric, chunk_size=512):
     """
     Gathers a large tensor across all ranks in memory-efficient chunks,
-    with padding to handle unequal splits.
+    without changing the original first dimension (N).
+    Padding is used only internally and removed after gathering.
     """
     local_len = tensor.shape[0]
     dtype = tensor.dtype
     device = tensor.device
-    shape = tensor.shape[1:]  # everything except batch
+    shape = tensor.shape[1:]
+
+    # Pick safe pad value
+    if dtype in (torch.int32, torch.int64):
+        pad_value = -1
+    else:
+        pad_value = float('nan')
 
     gathered_chunks = []
 
     for start in range(0, local_len, chunk_size):
         end = min(start + chunk_size, local_len)
         chunk = tensor[start:end]
+
+        # Only pad if chunk < chunk_size
         pad_size = chunk_size - (end - start)
         if pad_size > 0:
-            pad_tensor = torch.zeros((pad_size, *shape), dtype=dtype, device=device)
+            pad_tensor = torch.full((pad_size, *shape), pad_value, dtype=dtype, device=device)
             chunk = torch.cat([chunk, pad_tensor], dim=0)
-        gathered = fabric.all_gather(chunk)  # shape: [world_size, chunk_size, ...]
+
+        # Gather across all ranks
+        gathered = fabric.all_gather(chunk)  # [world_size, chunk_size, ...]
         gathered = gathered.cpu()
-        gathered_list = list(torch.unbind(gathered, dim=0))
-        for g in gathered_list:
-            real_len = min(chunk_size, local_len - start)
-            gathered_chunks.append(g[:real_len].clone())
-        del chunk, gathered, gathered_list
+        gathered_chunks.extend(torch.unbind(gathered, dim=0))
+
+        del chunk, gathered
         torch.cuda.empty_cache()
+
     result = torch.cat(gathered_chunks, dim=0)
-    return result
+
+    # Trim padding, keeping only original elements across all ranks
+    if dtype in (torch.int32, torch.int64):
+        mask = result != -1
+        if result.ndim == 1:
+            result = result[mask]
+        else:
+            # Keep rows where **any** element is valid (no sentinel)
+            valid_rows = mask.any(dim=tuple(range(1, result.ndim)))
+            result = result[valid_rows]
+    else:
+        if result.ndim == 1:
+            result = result[torch.isfinite(result)]
+        else:
+            valid_rows = torch.isfinite(result).all(dim=tuple(range(1, result.ndim)))
+            result = result[valid_rows]
+
+    # Ensure result keeps the correct first dimension
+    return result[:local_len * fabric.world_size]
+
+
+
