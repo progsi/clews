@@ -73,15 +73,12 @@ class Dataset(torch.utils.data.Dataset):
         for i, cl in enumerate(self.clique.keys()):
             self.clique2id[cl] = offset + i
         # Get idx2version
-        versions = set()
+        self.versions = []
         for clique, vers in self.clique.items():
             if not clique in vers[0]:
                 vers = [clique + ":" + v for v in vers]
-            versions.update(vers)
-
-        # Keep versions as list if you need the list form
-        self.versions = list(versions)
-        self.info = {k: v for k, v in self.info.items() if k in versions}
+            self.versions += vers
+        self.info = {k: v for k, v in self.info.items() if k in self.versions}
        
         # Prints
         if self.verbose:
@@ -104,7 +101,10 @@ class Dataset(torch.utils.data.Dataset):
         otherversions = []
         for v in self.clique[cl]:
             if v != v1 or torch.rand(1).item() < self.p_samesong:
-                otherversions.append(v)
+                if cl in v:
+                    otherversions.append(v)
+                else:
+                    otherversions.append(cl + ":" + v)
         if self.augment:
             new_vers = []
             for k in torch.randperm(len(otherversions)).tolist():

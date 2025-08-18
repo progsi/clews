@@ -5,7 +5,7 @@ from omegaconf import OmegaConf
 import torch, math
 from datetime import timedelta
 from torch.utils.data.distributed import DistributedSampler
-
+import torch.distributed as dist
 from lightning import Fabric
 from lightning.fabric.strategies import DDPStrategy
 
@@ -70,7 +70,7 @@ torch.backends.cudnn.deterministic = False
 torch.set_float32_matmul_precision("medium")
 torch.autograd.set_detect_anomaly(False)
 fabric = Fabric(
-    accelerator="gpu",
+    accelerator="cuda", 
     devices=args.ngpus,
     num_nodes=args.nnodes,
     strategy=DDPStrategy(broadcast_buffers=False, timeout=timedelta(milliseconds=18_000_000)),
@@ -153,15 +153,15 @@ else:
     cmask = None
     eval_name = ""
 
-sampler = DistributedSampler(dset, num_replicas=fabric.world_size, rank=fabric.global_rank, shuffle=False)
 dloader = torch.utils.data.DataLoader(
     dset,
     batch_size=1,
-    sampler=sampler,
+    shuffle=False,
     num_workers=8,
     drop_last=False,
     pin_memory=False,
 )
+dloader = fabric.setup_dataloaders(dloader)
 
 ###############################################################################
 
@@ -245,154 +245,153 @@ def extract_embeddings(shingle_len, shingle_hop, outpath, eps=1e-6):
     
 ###############################################################################
 
-
+@torch.inference_mode()
 def evaluate(batch_size_candidates=2**15, cmask=None):
-    # Let's go
-    with torch.inference_mode():
 
-        need_seperate_candidates = not args.cslen == args.qslen or not args.cshop == args.qshop
-        # Extract embeddings
-        if args.jobname is not None:
-            outp_embs_q = os.path.join(save_path, f"embeddings_q_{fabric.global_rank}.h5")
-            if need_seperate_candidates:
-                outp_embs_c = os.path.join(save_path, f"embeddings_c_{fabric.global_rank}.h5")
-            else:
-                outp_embs_c = None
+    need_seperate_candidates = not args.cslen == args.qslen or not args.cshop == args.qshop
+    # Extract embeddings
+    if args.jobname is not None:
+        outp_embs_q = os.path.join(save_path, f"embeddings_q_{fabric.global_rank}.h5")
+        if need_seperate_candidates:
+            outp_embs_c = os.path.join(save_path, f"embeddings_c_{fabric.global_rank}.h5")
         else:
-            outp_embs_q, outp_embs_c = None
+            outp_embs_c = None
+    else:
+        outp_embs_q, outp_embs_c = None
+    
+    expected_len = len(dloader)
+    if outp_embs_q is None or not os.path.isfile(outp_embs_q):
+        # change path to make sure we do not extract for the whole dataset
+        extract_embeddings(
+            args.qslen, args.qshop, outpath=outp_embs_q
+        )
+    
+    # let first GPU load the embeddings and send to other GPUs
+    query_c, query_i, query_z, query_m, qhop = file_utils.load_from_hdf5(outp_embs_q)
+    
+    if len(query_i) < expected_len:
+        myprint(f"Warning: expected {expected_len} queries, got {len(query_i)}")
+    elif len(query_i) > expected_len:
+        indices = torch.tensor(dset.get_indices(), dtype=torch.long)
+        mask = torch.isin(query_i, indices)
+        query_i = query_i[mask]
+        query_c = query_c[mask]
+        query_z = query_z[mask]
+        query_m = query_m[mask]
+    
+    if qhop != args.qshop:
+        myprint(f"Reducing query windows from {qhop} to {args.qshop} seconds...")
+        query_z = tops.reduce_windows(query_z, qhop, args.qshop, dim=1)
+        query_m = tops.reduce_windows(query_m, qhop, args.qshop, dim=1)
+
+    print(f"Having query embeddings of shape: {query_z.shape}")
         
-        expected_len = len(dloader)
-        if outp_embs_q is None or not os.path.isfile(outp_embs_q):
-            # change path to make sure we do not extract for the whole dataset
+    query_c = query_c.int()
+    query_i = query_i.int()
+    query_z = query_z.half()
+    
+
+    if not need_seperate_candidates:
+        myprint("Cand emb: (copy)")
+        cand_c, cand_i, cand_z, cand_m = (
+            query_c.clone(),
+            query_i.clone(),
+            query_z.clone(),
+            query_m.clone(),
+        )
+    else:
+        if outp_embs_q is None or not os.path.isfile(outp_embs_c):
             extract_embeddings(
-                args.qslen, args.qshop, outpath=outp_embs_q
+                args.qslen, args.qshop, outpath=outp_embs_c
             )
-        
-        # let first GPU load the embeddings and send to other GPUs
-        query_c, query_i, query_z, query_m, qhop = file_utils.load_from_hdf5(outp_embs_q)
-        
-        if len(query_i) < expected_len:
-            myprint(f"Warning: expected {expected_len} queries, got {len(query_i)}")
-        elif len(query_i) > expected_len:
-            indices = torch.tensor(dset.get_indices(), dtype=torch.long)
-            mask = torch.isin(query_i, indices)
-            query_i = query_i[mask]
-            query_c = query_c[mask]
-            query_z = query_z[mask]
-            query_m = query_m[mask]
-        
-        if qhop != args.qshop:
-            myprint(f"Reducing query windows from {qhop} to {args.qshop} seconds...")
-            query_z = tops.reduce_windows(query_z, qhop, args.qshop, dim=1)
-            query_m = tops.reduce_windows(query_m, qhop, args.qshop, dim=1)
+        cand_c, cand_i, cand_z, cand_m, chop = file_utils.load_from_hdf5(outp_embs_c)
+        if len(cand_i) < expected_len:
+            myprint(f"Warning: expected {expected_len:,} queries, got {len(query_i):,}")
+        elif len(cand_i) > expected_len:
+            cand_i = cand_i[mask]
+            cand_c = cand_c[mask]
+            cand_z = cand_z[mask]
+            cand_m = cand_m[mask]
+        if chop != args.cshop:
+            myprint(f"Reducing candidate windows from {qhop} to {args.qshop} seconds...")
+            cand_z = tops.reduce_windows(cand_z, chop, args.cshop, dim=1)
+            cand_m = tops.reduce_windows(cand_m, chop, args.cshop, dim=1)
+        print(f"Having candidate embeddings of shape: {cand_z.shape}")
 
-        print(f"Having query embeddings of shape: {query_z.shape}")
-            
-        query_c = query_c.int()
-        query_i = query_i.int()
-        query_z = query_z.half()
-        
+        cand_c = cand_c.int()
+        cand_i = cand_i.int()
+        cand_z = cand_z.half()
+    
+    # Collect candidates from all GPUs + collapse to batch dim
+    fabric.barrier()
+    cand_c = fabric.all_gather(cand_c)
+    cand_i = fabric.all_gather(cand_i)
+    cand_z = fabric.all_gather(cand_z)
+    cand_m = fabric.all_gather(cand_m)
 
-        if not need_seperate_candidates:
-            myprint("Cand emb: (copy)")
-            cand_c, cand_i, cand_z, cand_m = (
-                query_c.clone(),
-                query_i.clone(),
-                query_z.clone(),
-                query_m.clone(),
+    # Collapse to batch dim
+    cand_c = torch.cat(torch.unbind(cand_c, dim=0), dim=0)
+    cand_i = torch.cat(torch.unbind(cand_i, dim=0), dim=0)
+    cand_z = torch.cat(torch.unbind(cand_z, dim=0), dim=0)
+    cand_m = torch.cat(torch.unbind(cand_m, dim=0), dim=0)
+    
+    # Evaluate
+    step = 0
+    total_saved = 0
+    buffer = {"clique": [], "index": [], "aps": [], "r1s": [], "rpcs": [], "ncands": [], "nrel": []}
+    if cmask is None:
+        outpath = os.path.join(save_path, f"measures_{fabric.global_rank}.h5")
+    else:
+        outpath = os.path.join(save_path, f"measures_{args.domain_mode}_{fabric.global_rank}.h5")
+
+    for n in myprogbar(range(len(query_z)), desc="Retrieve", leave=True):
+        if cmask is not None:
+            has_candidates = (cmask[n].sum() > 0).item()
+            has_positives = ((query_c[n : n + 1].unsqueeze(1) == cand_c[cmask[n]]).sum() >= 2).item()
+            if not has_candidates or not has_positives:
+                continue  # skip if no valid or positive candidates
+        
+        ap, r1, rpc = eval.compute(
+            model,
+            query_c[n : n + 1],
+            query_i[n : n + 1],
+            query_z[n : n + 1],
+            cand_c[cmask[n]] if cmask is not None else cand_c,
+            cand_i[cmask[n]] if cmask is not None else cand_i,
+            cand_z[cmask[n]] if cmask is not None else cand_z,
+            queries_m=query_m[n : n + 1],
+            candidates_m=cand_m[cmask[n]] if cmask is not None else cand_m,
+            redux_strategy=args.redux,
+            batch_size_candidates=batch_size_candidates,
+        )
+
+        # Move to CPU immediately
+        buffer["clique"].append(query_c[n : n + 1].cpu())
+        buffer["index"].append(query_i[n : n + 1].cpu())
+        buffer["aps"].append(ap.cpu())
+        buffer["r1s"].append(r1.cpu())
+        buffer["rpcs"].append(rpc.cpu())
+        cur_ncands = torch.tensor([torch.sum(cmask[n], dtype=torch.int32)]) if cmask is not None else torch.tensor([len(cand_i)])
+        buffer["ncands"].append(cur_ncands.cpu())
+        cur_nrel = torch.tensor([torch.sum(query_c[n] == cand_c[cmask[n]]).item()]).cpu() if cmask is not None else torch.tensor([torch.sum(query_c[n] == cand_c).item()])
+        buffer["nrel"].append(cur_nrel)
+        if outpath is not None and (step + 1) % 1000 == 0 or step == len(query_z) - 1:
+            file_utils.save_to_hdf5(
+                outpath,
+                {
+                    "clique": torch.cat(buffer["clique"], dim=0),
+                    "index": torch.cat(buffer["index"], dim=0),
+                    "aps": torch.cat(buffer["aps"], dim=0),
+                    "r1s": torch.cat(buffer["r1s"], dim=0),
+                    "rpcs": torch.cat(buffer["rpcs"], dim=0),
+                    "ncands": torch.cat(buffer["ncands"], dim=0),
+                    "nrel": torch.cat(buffer["nrel"], dim=0)
+                },
+                batch_start=total_saved,
+                hop=args.qshop,
             )
-        else:
-            if outp_embs_q is None or not os.path.isfile(outp_embs_c):
-                extract_embeddings(
-                    args.qslen, args.qshop, outpath=outp_embs_c
-                )
-            cand_c, cand_i, cand_z, cand_m, chop = file_utils.load_from_hdf5(outp_embs_c)
-            if len(cand_i) < expected_len:
-                myprint(f"Warning: expected {expected_len:,} queries, got {len(query_i):,}")
-            elif len(cand_i) > expected_len:
-                cand_i = cand_i[mask]
-                cand_c = cand_c[mask]
-                cand_z = cand_z[mask]
-                cand_m = cand_m[mask]
-            if chop != args.cshop:
-                myprint(f"Reducing candidate windows from {qhop} to {args.qshop} seconds...")
-                cand_z = tops.reduce_windows(cand_z, chop, args.cshop, dim=1)
-                cand_m = tops.reduce_windows(cand_m, chop, args.cshop, dim=1)
-            print(f"Having candidate embeddings of shape: {cand_z.shape}")
-
-            cand_c = cand_c.int()
-            cand_i = cand_i.int()
-            cand_z = cand_z.half()
-        
-        # Collect candidates from all GPUs + collapse to batch dim
-        fabric.barrier()
-        cand_c = fabric.all_gather(cand_c)
-        cand_i = fabric.all_gather(cand_i)
-        cand_z = fabric.all_gather(cand_z)
-        cand_m = fabric.all_gather(cand_m)
-        cand_c = torch.cat(torch.unbind(cand_c, dim=0), dim=0)
-        cand_i = torch.cat(torch.unbind(cand_i, dim=0), dim=0)
-        cand_z = torch.cat(torch.unbind(cand_z, dim=0), dim=0)
-        cand_m = torch.cat(torch.unbind(cand_m, dim=0), dim=0)
-        
-        # Evaluate
-        my_queries = range(fabric.global_rank, len(query_z), fabric.world_size)
-        step = 0
-        total_saved = 0
-        buffer = {"clique": [], "index": [], "aps": [], "r1s": [], "rpcs": [], "ncands": [], "nrel": []}
-        if cmask is None:
-            outpath = os.path.join(save_path, f"measures_{fabric.global_rank}.h5")
-        else:
-            outpath = os.path.join(save_path, f"measures_{args.domain_mode}_{fabric.global_rank}.h5")
-
-        for n in myprogbar(my_queries, desc=f"Retrieve (GPU {fabric.global_rank})", leave=True):
-            if cmask is not None:
-                has_candidates = (cmask[n].sum() > 0).item()
-                has_positives = ((query_c[n : n + 1].unsqueeze(1) == cand_c[cmask[n]]).sum() >= 2).item()
-                if not has_candidates or not has_positives:
-                    continue  # skip if no valid or positive candidates
-                
-            ap, r1, rpc = eval.compute(
-                model,
-                query_c[n : n + 1],
-                query_i[n : n + 1],
-                query_z[n : n + 1],
-                cand_c[cmask[n]] if cmask is not None else cand_c,
-                cand_i[cmask[n]] if cmask is not None else cand_i,
-                cand_z[cmask[n]] if cmask is not None else cand_z,
-                queries_m=query_m[n : n + 1],
-                candidates_m=cand_m[cmask[n]] if cmask is not None else cand_m,
-                redux_strategy=args.redux,
-                batch_size_candidates=batch_size_candidates,
-            )
-
-            # Move to CPU immediately
-            buffer["clique"].append(query_c[n : n + 1].cpu())
-            buffer["index"].append(query_i[n : n + 1].cpu())
-            buffer["aps"].append(ap.cpu())
-            buffer["r1s"].append(r1.cpu())
-            buffer["rpcs"].append(rpc.cpu())
-            cur_ncands = torch.tensor([torch.sum(cmask[n], dtype=torch.int32)]) if cmask is not None else torch.tensor([len(cand_i)])
-            buffer["ncands"].append(cur_ncands.cpu())
-            cur_nrel = torch.tensor([torch.sum(query_c[n] == cand_c[cmask[n]]).item()]).cpu() if cmask is not None else torch.tensor([torch.sum(query_c[n] == cand_c).item()])
-            buffer["nrel"].append(cur_nrel)
-            if outpath is not None and (step + 1) % 1000 == 0 or step == len(my_queries) - 1:
-                file_utils.save_to_hdf5(
-                    outpath,
-                    {
-                        "clique": torch.cat(buffer["clique"], dim=0),
-                        "index": torch.cat(buffer["index"], dim=0),
-                        "aps": torch.cat(buffer["aps"], dim=0),
-                        "r1s": torch.cat(buffer["r1s"], dim=0),
-                        "rpcs": torch.cat(buffer["rpcs"], dim=0),
-                        "ncands": torch.cat(buffer["ncands"], dim=0),
-                        "nrel": torch.cat(buffer["nrel"], dim=0)
-                    },
-                    batch_start=total_saved,
-                    hop=args.qshop,
-                )
-                myprint(f"MAP {torch.stack(buffer['aps']).mean().item():.3f}; MR1 {torch.stack(buffer['r1s']).mean().item():.3f}. Saved measures at batch {step + 1}.")
-            step += 1
+            myprint(f"MAP {torch.stack(buffer['aps']).mean().item():.3f}; MR1 {torch.stack(buffer['r1s']).mean().item():.3f}. Saved measures at batch {step + 1}.")
+        step += 1
               
         aps = torch.stack(buffer["aps"])
         r1s = torch.stack(buffer["r1s"])
