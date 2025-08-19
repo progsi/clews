@@ -56,12 +56,6 @@ if "cslen" not in args:  # candidate shingle len
 if "cshop" not in args:  # candidate shingle hop (default = every 5 sec)
     args.cshop = None
 
-# Set save path
-test_subset = args.jobname.split("-")[-1]
-sub_path = f"hs{args.qshop}ws{args.qslen}" if not (args.qslen is None or args.qshop is None) else "full_track"
-save_path = os.path.join(log_path, test_subset, sub_path)
-os.makedirs(save_path, exist_ok=True)
-
 ###############################################################################
 
 # Init pytorch/Fabric
@@ -120,7 +114,9 @@ if args.path_meta is not None:
 conf.data.path = conf.path
 
 # Get dataset
-if args.domain is not None:
+is_cross_domain = args.domain is not None
+is_domain_to_domain = (args.qsdomain is not None and args.csdomain is not None)
+if is_cross_domain:
     myprint(f"Using cross-domain dataset with domain {args.domain}...")
     dset = dataset.CrossDomainDataset(
         args.domain,
@@ -132,13 +128,14 @@ if args.domain is not None:
         limit_cliques=args.limit_num,
         checks=False, 
     )
-    if args.domain_mode is not None:
-        myprint(f"Using domain mode {args.domain_mode}...")
-        cmask = dset.get_domain_mask(args.domain_mode)
-        eval_name = f"{args.domain_mode}"
-    elif args.qsdomain is not None and args.csdomain is not None:
+    if is_domain_to_domain:
         cmask = dset.get_domain_mask("pair", args.qsdomain, args.csdomain)
         eval_name = f"{args.qsdomain}-to-{args.csdomain}"
+    else:
+        myprint(f"Using domain mode {args.domain_mode}...")
+        cmask = dset.get_domain_mask(args.domain_mode)
+        eval_name = f"{args.domain}_{args.domain_mode}"
+
 else:
     myprint("Using normal dataset...")
     dset = dataset.Dataset(
@@ -162,6 +159,12 @@ dloader = torch.utils.data.DataLoader(
     pin_memory=False,
 )
 dloader = fabric.setup_dataloaders(dloader)
+
+# Set save path
+test_subset = args.jobname.split("-")[-1]
+sub_path = f"hs{args.qshop}ws{args.qslen}" if not (args.qslen is None or args.qshop is None) else "full_track"
+save_path = os.path.join(log_path, test_subset, sub_path, "results", eval_name)
+os.makedirs(save_path, exist_ok=True)
 
 ###############################################################################
 
