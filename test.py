@@ -163,8 +163,9 @@ dloader = fabric.setup_dataloaders(dloader)
 # Set save path
 test_subset = args.jobname.split("-")[-1]
 sub_path = f"hs{args.qshop}ws{args.qslen}" if not (args.qslen is None or args.qshop is None) else "full_track"
-save_path = os.path.join(log_path, test_subset, sub_path, "results", eval_name)
-os.makedirs(save_path, exist_ok=True)
+save_path = os.path.join(log_path, test_subset, sub_path, "results")
+metrics_path = os.path.join(save_path, eval_name)
+os.makedirs(metrics_path, exist_ok=True)
 
 ###############################################################################
 
@@ -343,9 +344,9 @@ def evaluate(batch_size_candidates=2**15, cmask=None):
     total_saved = 0
     buffer = {"clique": [], "index": [], "aps": [], "r1s": [], "rpcs": [], "ncands": [], "nrel": []}
     if cmask is None:
-        outpath = os.path.join(save_path, f"measures_{fabric.global_rank}.h5")
+        outpath = os.path.join(metrics_path, f"measures_{fabric.global_rank}.h5")
     else:
-        outpath = os.path.join(save_path, f"measures_{args.domain_mode}_{fabric.global_rank}.h5")
+        outpath = os.path.join(metrics_path, f"measures_{args.domain_mode}_{fabric.global_rank}.h5")
 
     for n in myprogbar(range(len(query_z)), desc="Retrieve", leave=True):
         if cmask is not None:
