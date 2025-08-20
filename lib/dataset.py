@@ -353,51 +353,138 @@ class CrossDomainDataset(Dataset):
 
         return mask
     
+    # def get_domain_mask(
+    #     self,
+    #     mode: str = "same",
+    #     qslabel: str = None,
+    #     cslabel: str = None,
+    #     query_indices: torch.Tensor | list[int] = None,
+    #     cand_indices: torch.Tensor | list[int] = None,
+    # ) -> torch.BoolTensor:
+    #     """
+    #     Returns a [Q, C] boolean mask where Q = #queries, C = #candidates.
+    #     If query_indices / cand_indices are provided, the mask is restricted
+    #     to those dataset indices in that order.
+    #     """
+    #     x = self.domains_processed  # [N, D] multi-hot
+
+    #     # resolve query subset
+    #     if query_indices is not None:
+    #         q_keys = [self.id2key[int(i)] for i in query_indices]
+    #         key2pos = {k: i for i, k in enumerate(self.info.keys())}
+    #         q_pos = [key2pos[k] for k in q_keys]
+    #         q_x = x[q_pos]  # [Q, D]
+    #     else:
+    #         q_x = x  # [N, D]
+
+    #     # resolve candidate subset
+    #     if cand_indices is not None:
+    #         c_keys = [self.id2key[int(i)] for i in cand_indices]
+    #         key2pos = {k: i for i, k in enumerate(self.info.keys())}
+    #         c_pos = [key2pos[k] for k in c_keys]
+    #         c_x = x[c_pos]  # [C, D]
+    #     else:
+    #         c_x = x  # [N, D]
+
+    #     assert mode in ["same", "overlap", "disjoint", "pair"], f"Invalid mode: {mode}"
+
+    #     if mode == "same":
+    #         # Exact match between queries and candidates
+    #         mask = (q_x.unsqueeze(1) == c_x.unsqueeze(0)).all(dim=2).bool()  # [Q, C]
+
+    #     elif mode == "overlap":
+    #         # At least one shared domain label, not identical
+    #         mask = (q_x @ c_x.T > 0) & ~(q_x.unsqueeze(1) == c_x.unsqueeze(0)).all(dim=2)
+
+    #     elif mode == "disjoint":
+    #         # No shared domain labels
+    #         mask = ~(q_x[:, None, :] & c_x[None, :, :]).any(dim=-1)  # [Q, C]
+
+    #     elif mode == "pair":
+    #         assert qslabel is not None and cslabel is not None, \
+    #             "qslabel and cslabel must be specified for 'pair' mode"
+    #         q_idx = self.label2ids[qslabel]
+    #         c_idx = self.label2ids[cslabel]
+
+    #         q_sub = q_x[:, q_idx]  # [Q, |q_idx|]
+    #         c_sub = c_x[:, c_idx]  # [C, |c_idx|]
+
+    #         # Asymmetric overlap: query domains vs candidate domains
+    #         mask = q_sub.bool().unsqueeze(1) & c_sub.bool().unsqueeze(0)  # [Q, C]
+
+    #     else:
+    #         raise ValueError(f"Unknown mode '{mode}'")
+
+    #     return mask  # [Q, C]
+
     def get_domain_mask(
-        self,
-        mode: str = "same",
-        qslabel: str = None,
-        cslabel: str = None,
-        query_indices: torch.Tensor | list[int] = None,
-        cand_indices: torch.Tensor | list[int] = None,
-    ) -> torch.BoolTensor:
+            self,
+            mode: str = "same",
+            qslabel: str = None,
+            cslabel: str = None,
+            query_i: torch.Tensor | list[int] = None,
+            cand_i: torch.Tensor | list[int] = None,
+            query_c: torch.Tensor | list[int] = None,
+            cand_c: torch.Tensor | list[int] = None,
+        ) -> tuple[torch.BoolTensor, torch.Tensor]:
         """
-        Returns a [Q, C] boolean mask where Q = #queries, C = #candidates.
-        If query_indices / cand_indices are provided, the mask is restricted
-        to those dataset indices in that order.
+        Returns:
+            - filtered_mask: [Q_filtered, C] boolean mask 
+                (only rows with at least one valid candidate remain).
+            - row_indices: [Q_filtered] tensor of indices referring to the
+                surviving query rows in the *original* [Q, C] mask.
+
+        Improvements:
+            - self-matches (query == candidate index) are explicitly set to False.
         """
         x = self.domains_processed  # [N, D] multi-hot
+        device = x.device
 
+        # ----------------------
         # resolve query subset
-        if query_indices is not None:
-            q_keys = [self.id2key[int(i)] for i in query_indices]
+        # ----------------------
+        if query_i is not None:
+            q_keys = [self.id2key[int(i)] for i in query_i]
             key2pos = {k: i for i, k in enumerate(self.info.keys())}
             q_pos = [key2pos[k] for k in q_keys]
             q_x = x[q_pos]  # [Q, D]
+            if query_c is not None:
+                query_c = torch.as_tensor(query_c, device=device)[q_pos]
         else:
             q_x = x  # [N, D]
+            if query_c is not None:
+                query_c = torch.as_tensor(query_c, device=device)
 
+        # ----------------------
         # resolve candidate subset
-        if cand_indices is not None:
-            c_keys = [self.id2key[int(i)] for i in cand_indices]
+        # ----------------------
+        if cand_i is not None:
+            c_keys = [self.id2key[int(i)] for i in cand_i]
             key2pos = {k: i for i, k in enumerate(self.info.keys())}
             c_pos = [key2pos[k] for k in c_keys]
             c_x = x[c_pos]  # [C, D]
+            if cand_c is not None:
+                cand_c = torch.as_tensor(cand_c, device=device)[c_pos]
         else:
             c_x = x  # [N, D]
+            if cand_c is not None:
+                cand_c = torch.as_tensor(cand_c, device=device)
 
+        Q, _ = q_x.shape
+        C, _ = c_x.shape
+
+        # ----------------------
+        # domain mask logic
+        # ----------------------
         assert mode in ["same", "overlap", "disjoint", "pair"], f"Invalid mode: {mode}"
 
         if mode == "same":
-            # Exact match between queries and candidates
-            mask = (q_x.unsqueeze(1) == c_x.unsqueeze(0)).all(dim=2).bool()  # [Q, C]
+            mask = (q_x.unsqueeze(1) == c_x.unsqueeze(0)).all(dim=2)  # [Q, C]
 
         elif mode == "overlap":
-            # At least one shared domain label, not identical
             mask = (q_x @ c_x.T > 0) & ~(q_x.unsqueeze(1) == c_x.unsqueeze(0)).all(dim=2)
 
         elif mode == "disjoint":
-            # No shared domain labels
             mask = ~(q_x[:, None, :] & c_x[None, :, :]).any(dim=-1)  # [Q, C]
 
         elif mode == "pair":
@@ -409,10 +496,31 @@ class CrossDomainDataset(Dataset):
             q_sub = q_x[:, q_idx]  # [Q, |q_idx|]
             c_sub = c_x[:, c_idx]  # [C, |c_idx|]
 
-            # Asymmetric overlap: query domains vs candidate domains
             mask = q_sub.bool().unsqueeze(1) & c_sub.bool().unsqueeze(0)  # [Q, C]
 
-        else:
-            raise ValueError(f"Unknown mode '{mode}'")
+        # ----------------------
+        # apply class ids if given
+        # ----------------------
+        if query_c is not None and cand_c is not None:
+            class_mask = query_c[:, None] == cand_c[None, :]
+            mask &= class_mask
 
-        return mask  # [Q, C]
+        # ----------------------
+        # remove self matches
+        # ----------------------
+        if query_i is not None and cand_i is not None:
+            q_idx = torch.as_tensor(query_i, device=device)
+            c_idx = torch.as_tensor(cand_i, device=device)
+            # broadcast comparison [Q, C]
+            self_mask = q_idx[:, None] == c_idx[None, :]
+            mask &= ~self_mask  # set self matches to False
+
+        # ----------------------
+        # filter rows
+        # ----------------------
+        has_rel = mask.any(dim=1)  # [Q] bool
+        row_indices = torch.nonzero(has_rel).squeeze(1)  # [Q_filtered]
+        filtered_mask = mask[has_rel]  # [Q_filtered, C]
+
+        return filtered_mask, row_indices
+

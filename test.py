@@ -341,21 +341,19 @@ def evaluate(batch_size_candidates=2**15,
     cand_m = torch.cat(torch.unbind(cand_m, dim=0), dim=0)
     if is_cross_domain:
         if is_domain_to_domain:
-            dom_mask = dset.get_domain_mask(mode="pair", 
+            dom_mask, valid_queries = dset.get_domain_mask(mode="pair", 
                                             qslabel=args.qsdomain, 
                                             cslabel=args.csdomain,
-                                            query_indices=query_i, 
-                                            cand_indices=cand_i)
+                                            query_i=query_i, 
+                                            cand_i=cand_i,
+                                            query_c=query_c, 
+                                            cand_c=cand_c)
         else:
-            dom_mask = dset.get_domain_mask(mode=args.domain_mode, 
-                                            query_indices=query_i, 
-                                            cand_indices=cand_i)
-        # Precompute valid queries once
-        has_candidates = (dom_mask.sum(dim=1) > 0).to(cand_c.device)  # [Q, C]
-        eq_matrix = (query_c.unsqueeze(1).to(cand_c.device) == cand_c.unsqueeze(0))  # [Q, C]
-        eq_matrix = eq_matrix & dom_mask.to(eq_matrix.device)  # still [Q, C]
-        has_positives = eq_matrix.sum(dim=1) >= 2
-        valid_queries = (has_candidates & has_positives).nonzero().squeeze(dim=1)
+            dom_mask, valid_queries = dset.get_domain_mask(mode=args.domain_mode, 
+                                            query_i=query_i, 
+                                            cand_i=cand_i,
+                                            query_c=query_c, 
+                                            cand_c=cand_c)
         if valid_queries.numel() == 0:
             myprint("No elements for this domain evaluation.")
             sys.exit(0)
@@ -372,18 +370,17 @@ def evaluate(batch_size_candidates=2**15,
     else:
         outpath = os.path.join(metrics_path, f"measures_{args.domain_mode}_{fabric.global_rank}.h5")
 
-    for n in myprogbar(valid_queries.tolist(), desc="Retrieve", leave=True):
-        
+    for row_idx, n in enumerate(valid_queries.tolist()):
         ap, r1, rpc = eval.compute(
             model,
             query_c[n : n + 1],
             query_i[n : n + 1],
             query_z[n : n + 1],
-            cand_c[dom_mask[n]] if dom_mask is not None else cand_c,
-            cand_i[dom_mask[n]] if dom_mask is not None else cand_i,
-            cand_z[dom_mask[n]] if dom_mask is not None else cand_z,
+            cand_c[dom_mask[row_idx]] if dom_mask is not None else cand_c,
+            cand_i[dom_mask[row_idx]] if dom_mask is not None else cand_i,
+            cand_z[dom_mask[row_idx]] if dom_mask is not None else cand_z,
             queries_m=query_m[n : n + 1],
-            candidates_m=cand_m[dom_mask[n]] if dom_mask is not None else cand_m,
+            candidates_m=cand_m[dom_mask[row_idx]] if dom_mask is not None else cand_m,
             redux_strategy=args.redux,
             batch_size_candidates=batch_size_candidates,
         )
@@ -394,9 +391,9 @@ def evaluate(batch_size_candidates=2**15,
         buffer["aps"].append(ap.cpu())
         buffer["r1s"].append(r1.cpu())
         buffer["rpcs"].append(rpc.cpu())
-        cur_ncands = torch.tensor([torch.sum(dom_mask[n], dtype=torch.int32)]) if dom_mask is not None else torch.tensor([len(cand_i)])
+        cur_ncands = torch.tensor([torch.sum(dom_mask[row_idx], dtype=torch.int32)]) if dom_mask is not None else torch.tensor([len(cand_i)])
         buffer["ncands"].append(cur_ncands.cpu())
-        cur_nrel = torch.tensor([torch.sum(query_c[n] == cand_c[dom_mask[n]]).item()]).cpu() if dom_mask is not None else torch.tensor([torch.sum(query_c[n] == cand_c).item()])
+        cur_nrel = (query_c[n] == cand_c[dom_mask[row_idx]] if dom_mask is not None else query_c[row_idx] == cand_c).sum()        
         buffer["nrel"].append(cur_nrel)
         if outpath is not None and (step + 1) % 1000 == 0 or step == len(query_z) - 1:
             file_utils.save_to_hdf5(
