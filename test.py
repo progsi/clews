@@ -129,11 +129,9 @@ if is_cross_domain:
         checks=False, 
     )
     if is_domain_to_domain:
-        cmask = dset.get_domain_mask("pair", args.qsdomain, args.csdomain)
         eval_name = f"{args.qsdomain}-to-{args.csdomain}"
     else:
         myprint(f"Using domain mode {args.domain_mode}...")
-        cmask = dset.get_domain_mask(args.domain_mode)
         eval_name = f"{args.domain}_{args.domain_mode}"
 
 else:
@@ -147,7 +145,6 @@ else:
         limit_cliques=args.limit_num,
         checks=False, 
     )
-    cmask = None
     eval_name = ""
 
 dloader = torch.utils.data.DataLoader(
@@ -250,7 +247,12 @@ def extract_embeddings(shingle_len, shingle_hop, outpath, eps=1e-6):
 ###############################################################################
 
 @torch.inference_mode()
-def evaluate(batch_size_candidates=2**15, cmask=None):
+def evaluate(batch_size_candidates=2**15, 
+             domain=None, 
+             qsdomain=None, 
+             csdomain=None, 
+             domain_mode=None,
+             ):
 
     need_seperate_candidates = not args.cslen == args.qslen or not args.cshop == args.qshop
     # Extract embeddings
@@ -294,7 +296,6 @@ def evaluate(batch_size_candidates=2**15, cmask=None):
     query_i = query_i.int()
     query_z = query_z.half()
     
-
     if not need_seperate_candidates:
         myprint("Cand emb: (copy)")
         cand_c, cand_i, cand_z, cand_m = (
@@ -338,33 +339,45 @@ def evaluate(batch_size_candidates=2**15, cmask=None):
     cand_i = torch.cat(torch.unbind(cand_i, dim=0), dim=0)
     cand_z = torch.cat(torch.unbind(cand_z, dim=0), dim=0)
     cand_m = torch.cat(torch.unbind(cand_m, dim=0), dim=0)
-    
+    if is_cross_domain:
+        if is_domain_to_domain:
+            dom_mask = dset.get_domain_mask("pair", args.qsdomain, args.csdomain, query_i,cand_i)
+        else:
+            dom_mask = dset.get_domain_mask(args.domain_mode, args.domain, query_i, cand_i)
+        # Precompute valid queries once
+        has_candidates = (dom_mask.sum(dim=1) > 0).to(cand_c.device)  # [Q, C]
+        eq_matrix = (query_c.unsqueeze(1).to(cand_c.device) == cand_c.unsqueeze(0))  # [Q, C]
+        eq_matrix = eq_matrix & dom_mask.to(eq_matrix.device)  # still [Q, C]
+        has_positives = eq_matrix.sum(dim=1) >= 2
+        valid_queries = (has_candidates & has_positives).nonzero().squeeze(dim=1)
+        if valid_queries.numel() == 0:
+            myprint("No elements for this domain evaluation.")
+            sys.exit(0)
+    else:
+        dom_mask = None
+        valid_queries = torch.arange(len(query_z))
+
     # Evaluate
     step = 0
     total_saved = 0
     buffer = {"clique": [], "index": [], "aps": [], "r1s": [], "rpcs": [], "ncands": [], "nrel": []}
-    if cmask is None:
+    if dom_mask is None:
         outpath = os.path.join(metrics_path, f"measures_{fabric.global_rank}.h5")
     else:
         outpath = os.path.join(metrics_path, f"measures_{args.domain_mode}_{fabric.global_rank}.h5")
 
-    for n in myprogbar(range(len(query_z)), desc="Retrieve", leave=True):
-        if cmask is not None:
-            has_candidates = (cmask[n].sum() > 0).item()
-            has_positives = ((query_c[n : n + 1].unsqueeze(1) == cand_c[cmask[n]]).sum() >= 2).item()
-            if not has_candidates or not has_positives:
-                continue  # skip if no valid or positive candidates
+    for n in myprogbar(valid_queries.tolist(), desc="Retrieve", leave=True):
         
         ap, r1, rpc = eval.compute(
             model,
             query_c[n : n + 1],
             query_i[n : n + 1],
             query_z[n : n + 1],
-            cand_c[cmask[n]] if cmask is not None else cand_c,
-            cand_i[cmask[n]] if cmask is not None else cand_i,
-            cand_z[cmask[n]] if cmask is not None else cand_z,
+            cand_c[dom_mask[n]] if dom_mask is not None else cand_c,
+            cand_i[dom_mask[n]] if dom_mask is not None else cand_i,
+            cand_z[dom_mask[n]] if dom_mask is not None else cand_z,
             queries_m=query_m[n : n + 1],
-            candidates_m=cand_m[cmask[n]] if cmask is not None else cand_m,
+            candidates_m=cand_m[dom_mask[n]] if dom_mask is not None else cand_m,
             redux_strategy=args.redux,
             batch_size_candidates=batch_size_candidates,
         )
@@ -375,9 +388,9 @@ def evaluate(batch_size_candidates=2**15, cmask=None):
         buffer["aps"].append(ap.cpu())
         buffer["r1s"].append(r1.cpu())
         buffer["rpcs"].append(rpc.cpu())
-        cur_ncands = torch.tensor([torch.sum(cmask[n], dtype=torch.int32)]) if cmask is not None else torch.tensor([len(cand_i)])
+        cur_ncands = torch.tensor([torch.sum(dom_mask[n], dtype=torch.int32)]) if dom_mask is not None else torch.tensor([len(cand_i)])
         buffer["ncands"].append(cur_ncands.cpu())
-        cur_nrel = torch.tensor([torch.sum(query_c[n] == cand_c[cmask[n]]).item()]).cpu() if cmask is not None else torch.tensor([torch.sum(query_c[n] == cand_c).item()])
+        cur_nrel = torch.tensor([torch.sum(query_c[n] == cand_c[dom_mask[n]]).item()]).cpu() if dom_mask is not None else torch.tensor([torch.sum(query_c[n] == cand_c).item()])
         buffer["nrel"].append(cur_nrel)
         if outpath is not None and (step + 1) % 1000 == 0 or step == len(query_z) - 1:
             file_utils.save_to_hdf5(
@@ -428,7 +441,7 @@ def evaluate(batch_size_candidates=2**15, cmask=None):
         # number of queries
         "nQs": len(aps), 
     }
-    if cmask is not None:
+    if dom_mask is not None:
         # stats about number of candidates 
         logdict_stats["nCs_median"] = ncands.float().median().int().item()
         logdict_stats["nCs_mean"] = ncands.float().mean().item()
@@ -463,4 +476,8 @@ if args.domain is not None:
 else:
         print("Overall results:")
 
-evaluate(batch_size_candidates=2**15, cmask=cmask)
+evaluate(batch_size_candidates=2**15, 
+         domain=args.domain, 
+         qsdomain=args.qsdomain, 
+         csdomain=args.csdomain, 
+         domain_mode=args.domain_mode)

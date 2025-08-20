@@ -79,6 +79,7 @@ class Dataset(torch.utils.data.Dataset):
                 vers = [clique + ":" + v for v in vers]
             self.versions += vers
         self.info = {k: v for k, v in self.info.items() if k in self.versions}
+        self.id2key = {v["id"]: k for k, v in self.info.items()}
        
         # Prints
         if self.verbose:
@@ -356,36 +357,62 @@ class CrossDomainDataset(Dataset):
         self,
         mode: str = "same",
         qslabel: str = None,
-        cslabel: str = None
+        cslabel: str = None,
+        query_indices: torch.Tensor | list[int] = None,
+        cand_indices: torch.Tensor | list[int] = None,
     ) -> torch.BoolTensor:
         """
-        Returns a [Q, C] boolean mask where Q is the number of queries and C is the number of candidates.
+        Returns a [Q, C] boolean mask where Q = #queries, C = #candidates.
+        If query_indices / cand_indices are provided, the mask is restricted
+        to those dataset indices in that order.
         """
         x = self.domains_processed  # [N, D] multi-hot
+
+        # resolve query subset
+        if query_indices is not None:
+            q_keys = [self.id2key[int(i)] for i in query_indices]
+            key2pos = {k: i for i, k in enumerate(self.info.keys())}
+            q_pos = [key2pos[k] for k in q_keys]
+            q_x = x[q_pos]  # [Q, D]
+        else:
+            q_x = x  # [N, D]
+
+        # resolve candidate subset
+        if cand_indices is not None:
+            c_keys = [self.id2key[int(i)] for i in cand_indices]
+            key2pos = {k: i for i, k in enumerate(self.info.keys())}
+            c_pos = [key2pos[k] for k in c_keys]
+            c_x = x[c_pos]  # [C, D]
+        else:
+            c_x = x  # [N, D]
+
         assert mode in ["same", "overlap", "disjoint", "pair"], f"Invalid mode: {mode}"
-       
+
         if mode == "same":
-            # Exact multihot vector match between queries and candidates
-            mask =  (x.unsqueeze(1) == x.unsqueeze(0)).all(dim=2).bool()
+            # Exact match between queries and candidates
+            mask = (q_x.unsqueeze(1) == c_x.unsqueeze(0)).all(dim=2).bool()  # [Q, C]
 
         elif mode == "overlap":
-            # At least one shared domain label
-            mask = ((x @ x.T) & ~(x.unsqueeze(1) == x.unsqueeze(0)).all(dim=2)).bool()
+            # At least one shared domain label, not identical
+            mask = (q_x @ c_x.T > 0) & ~(q_x.unsqueeze(1) == c_x.unsqueeze(0)).all(dim=2)
 
         elif mode == "disjoint":
             # No shared domain labels
-            mask = ~(x[:, None, :] & x[None, :, :]).any(dim=-1)
+            mask = ~(q_x[:, None, :] & c_x[None, :, :]).any(dim=-1)  # [Q, C]
 
         elif mode == "pair":
-            assert qslabel is not None and cslabel is not None, "qslabel and cslabel must be specified for 'pair' mode"
+            assert qslabel is not None and cslabel is not None, \
+                "qslabel and cslabel must be specified for 'pair' mode"
             q_idx = self.label2ids[qslabel]
             c_idx = self.label2ids[cslabel]
-            q_x = x[:, q_idx]  # (N, |q_idx|)
-            c_x = x[:, c_idx]  # (N, |c_idx|)
 
-            # Asymmetric overlap mask: q_x[i] vs c_x[j]
-            mask = q_x.bool().unsqueeze(0) & c_x.bool().unsqueeze(1)  # (N, N), bool # (N, N) mask
+            q_sub = q_x[:, q_idx]  # [Q, |q_idx|]
+            c_sub = c_x[:, c_idx]  # [C, |c_idx|]
+
+            # Asymmetric overlap: query domains vs candidate domains
+            mask = q_sub.bool().unsqueeze(1) & c_sub.bool().unsqueeze(0)  # [Q, C]
+
         else:
-            raise ValueError(f"Unknown mode '{mode}'. Must be one of: same, overlap, disjoint, pair.")
+            raise ValueError(f"Unknown mode '{mode}'")
 
-        return mask  # shape: [Q, C]
+        return mask  # [Q, C]

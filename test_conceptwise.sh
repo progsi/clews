@@ -15,13 +15,18 @@ fi
 
 MODELSUB="${DATASET_TRAIN}-${MODEL}"
 
-python test.py jobname=$JOBNAME checkpoint=logs/${MODELSUB}/checkpoint_best.ckpt conf=config/${MODELSUB}.yaml path_audio=data/audio path_meta=cache/${DATASET_TEST}.pt nnodes=$NNODES ngpus=$NGPUS domain=matched_concepts qsdomain=studio csdomain=acoustic
-python test.py jobname=$JOBNAME checkpoint=logs/${MODELSUB}/checkpoint_best.ckpt conf=config/${MODELSUB}.yaml path_audio=data/audio path_meta=cache/${DATASET_TEST}.pt nnodes=$NNODES ngpus=$NGPUS domain=matched_concepts qsdomain=studio csdomain=background
-python test.py jobname=$JOBNAME checkpoint=logs/${MODELSUB}/checkpoint_best.ckpt conf=config/${MODELSUB}.yaml path_audio=data/audio path_meta=cache/${DATASET_TEST}.pt nnodes=$NNODES ngpus=$NGPUS domain=matched_concepts qsdomain=studio csdomain=cover
-python test.py jobname=$JOBNAME checkpoint=logs/${MODELSUB}/checkpoint_best.ckpt conf=config/${MODELSUB}.yaml path_audio=data/audio path_meta=cache/${DATASET_TEST}.pt nnodes=$NNODES ngpus=$NGPUS domain=matched_concepts qsdomain=studio csdomain=instrumental
-python test.py jobname=$JOBNAME checkpoint=logs/${MODELSUB}/checkpoint_best.ckpt conf=config/${MODELSUB}.yaml path_audio=data/audio path_meta=cache/${DATASET_TEST}.pt nnodes=$NNODES ngpus=$NGPUS domain=matched_concepts qsdomain=studio csdomain=live
-python test.py jobname=$JOBNAME checkpoint=logs/${MODELSUB}/checkpoint_best.ckpt conf=config/${MODELSUB}.yaml path_audio=data/audio path_meta=cache/${DATASET_TEST}.pt nnodes=$NNODES ngpus=$NGPUS domain=matched_concepts qsdomain=studio csdomain=professional
-python test.py jobname=$JOBNAME checkpoint=logs/${MODELSUB}/checkpoint_best.ckpt conf=config/${MODELSUB}.yaml path_audio=data/audio path_meta=cache/${DATASET_TEST}.pt nnodes=$NNODES ngpus=$NGPUS domain=matched_concepts qsdomain=studio csdomain=remix
-python test.py jobname=$JOBNAME checkpoint=logs/${MODELSUB}/checkpoint_best.ckpt conf=config/${MODELSUB}.yaml path_audio=data/audio path_meta=cache/${DATASET_TEST}.pt nnodes=$NNODES ngpus=$NGPUS domain=matched_concepts qsdomain=studio csdomain=secondary
-python test.py jobname=$JOBNAME checkpoint=logs/${MODELSUB}/checkpoint_best.ckpt conf=config/${MODELSUB}.yaml path_audio=data/audio path_meta=cache/${DATASET_TEST}.pt nnodes=$NNODES ngpus=$NGPUS domain=matched_concepts qsdomain=studio csdomain=tutorial
-python test.py jobname=$JOBNAME checkpoint=logs/${MODELSUB}/checkpoint_best.ckpt conf=config/${MODELSUB}.yaml path_audio=data/audio path_meta=cache/${DATASET_TEST}.pt nnodes=$NNODES ngpus=$NGPUS domain=matched_concepts qsdomain=studio csdomain=studio
+csdomains=(acoustic background cover instrumental live professional remix secondary tutorial studio)
+
+for cs in "${csdomains[@]}"; do
+    python test.py \
+        jobname="${JOBNAME}" \
+        checkpoint="logs/${MODELSUB}/checkpoint_best.ckpt" \
+        conf="config/${MODELSUB}.yaml" \
+        path_audio="data/audio" \
+        path_meta="cache/${DATASET_TEST}.pt" \
+        nnodes="$NNODES" \
+        ngpus="$NGPUS" \
+        domain="matched_concepts" \
+        qsdomain="studio" \
+        csdomain="$cs"
+done
