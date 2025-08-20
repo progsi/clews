@@ -341,9 +341,15 @@ def evaluate(batch_size_candidates=2**15,
     cand_m = torch.cat(torch.unbind(cand_m, dim=0), dim=0)
     if is_cross_domain:
         if is_domain_to_domain:
-            dom_mask = dset.get_domain_mask("pair", args.qsdomain, args.csdomain, query_i,cand_i)
+            dom_mask = dset.get_domain_mask(mode="pair", 
+                                            qslabel=args.qsdomain, 
+                                            cslabel=args.csdomain,
+                                            query_indices=query_i, 
+                                            cand_indices=cand_i)
         else:
-            dom_mask = dset.get_domain_mask(args.domain_mode, args.domain, query_i, cand_i)
+            dom_mask = dset.get_domain_mask(mode=args.domain_mode, 
+                                            query_indices=query_i, 
+                                            cand_indices=cand_i)
         # Precompute valid queries once
         has_candidates = (dom_mask.sum(dim=1) > 0).to(cand_c.device)  # [Q, C]
         eq_matrix = (query_c.unsqueeze(1).to(cand_c.device) == cand_c.unsqueeze(0))  # [Q, C]
