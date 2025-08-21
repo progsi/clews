@@ -393,8 +393,8 @@ def evaluate(batch_size_candidates=2**15,
         buffer["rpcs"].append(rpc.cpu())
         cur_ncands = torch.tensor([torch.sum(dom_mask[row_idx], dtype=torch.int32)]) if dom_mask is not None else torch.tensor([len(cand_i)])
         buffer["ncands"].append(cur_ncands.cpu())
-        cur_nrel = (query_c[n] == cand_c[dom_mask[row_idx]] if dom_mask is not None else query_c[row_idx] == cand_c).sum()        
-        buffer["nrel"].append(cur_nrel)
+        cur_nrel = (query_c[n] == cand_c[dom_mask[row_idx]] if dom_mask is not None else query_c[row_idx] == cand_c).sum()
+        buffer["nrel"].append(cur_nrel.unsqueeze(0).cpu())
         if outpath is not None and (step + 1) % 1000 == 0 or step == len(query_z) - 1:
             file_utils.save_to_hdf5(
                 outpath,
