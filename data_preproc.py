@@ -281,7 +281,10 @@ splits = new_split
 
 # Save
 print(f"Save {args.fn_out}")
-torch.save([info, splits], args.fn_out)
+torch.save({
+        "info": info,
+        "split": splits   
+    }, args.fn_out)
 
 # Done
 print(f"Done!")
