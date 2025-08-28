@@ -408,26 +408,16 @@ class CrossDomainDataset(Dataset):
         elif mode == "disjoint":
             mask = ~(q_x[:, None, :] & c_x[None, :, :]).any(dim=-1)
         elif mode == "pair":
-            # --- query-side ---
-            if qslabel is not None:
-                q_idx = self.label2ids[qslabel]
-                if isinstance(q_idx, int):  # make scalar into list
-                    q_idx = [q_idx]
-                q_sub = q_x[:, q_idx].bool()  # [Q, |q_idx|]
-            else:
-                q_sub = torch.ones((q_x.shape[0], 1), dtype=torch.bool, device=device)  # no filter
+            def get_submask(x, slabel):
+                if slabel is None:
+                    return torch.ones(x.shape[0], device=device, dtype=torch.long)
+                else:
+                    idx = self.label2ids[slabel]
+                    return x[:, idx]
+            q_sub = get_submask(q_x, qslabel)  # [Q, |q_idx|]
+            c_sub = get_submask(c_x, cslabel)  # [C, |
+            mask = q_sub.bool().unsqueeze(1) & c_sub.bool().unsqueeze(0)
 
-            # --- candidate-side ---
-            if cslabel is not None:
-                c_idx = self.label2ids[cslabel]
-                if isinstance(c_idx, int):
-                    c_idx = [c_idx]
-                c_sub = c_x[:, c_idx].bool()  # [C, |c_idx|]
-            else:
-                c_sub = torch.ones((c_x.shape[0], 1), dtype=torch.bool, device=device)  # no filter
-
-            # --- build mask ---
-            mask = q_sub.unsqueeze(1) & c_sub.unsqueeze(0)  # [Q, C, ...] → broadcasted pair mask
         # --- remove self matches ---
         if query_i is not None and cand_i is not None:
             q_idx = torch.as_tensor(query_i, device=device)
@@ -450,4 +440,3 @@ class CrossDomainDataset(Dataset):
         filtered_mask = mask[has_rel]  # [Q_filtered, C] only domain-valid candidates
 
         return filtered_mask, row_indices
-
