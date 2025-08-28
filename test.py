@@ -247,12 +247,7 @@ def extract_embeddings(shingle_len, shingle_hop, outpath, eps=1e-6):
 ###############################################################################
 
 @torch.inference_mode()
-def evaluate(batch_size_candidates=2**15, 
-             domain=None, 
-             qsdomain=None, 
-             csdomain=None, 
-             domain_mode=None,
-             ):
+def evaluate(batch_size_candidates=2**15):
 
     need_seperate_candidates = not args.cslen == args.qslen or not args.cshop == args.qshop
     # Extract embeddings
@@ -479,8 +474,4 @@ if args.domain is not None:
 else:
         print("Overall results:")
 
-evaluate(batch_size_candidates=2**15, 
-         domain=args.domain, 
-         qsdomain=args.qsdomain, 
-         csdomain=args.csdomain, 
-         domain_mode=args.domain_mode)
+evaluate(batch_size_candidates=2**15)
