@@ -115,7 +115,7 @@ conf.data.path = conf.path
 
 # Get dataset
 is_cross_domain = args.domain is not None
-is_domain_to_domain = (args.qsdomain is not None and args.csdomain is not None)
+is_domain_to_domain = (args.qsdomain is not None or args.csdomain is not None)
 if is_cross_domain:
     myprint(f"Using cross-domain dataset with domain {args.domain}...")
     dset = dataset.CrossDomainDataset(
