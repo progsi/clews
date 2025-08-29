@@ -203,72 +203,104 @@ class Dataset(torch.utils.data.Dataset):
             sys.exit()
          
             
-class CrossDomainDataset(Dataset):
+class FilterableDataset(Dataset):
     """
-    Dataset for cross-domain evaluation.
+    Initializes all auxiliary labels automatically and supports complex filtering.
     """
-    def __init__(self, 
-                 domain, 
-                 conf, 
-                 split, 
-                 augment=False, 
-                 fullsongs=False, 
-                 checks=True, 
-                 verbose=False, 
-                 limit_cliques=None):
+    def __init__(self, conf, split, augment=False, fullsongs=False, checks=True, verbose=False, limit_cliques=None):
         super().__init__(conf, split, augment, fullsongs, checks, verbose, limit_cliques)
-        # Cross-domain specific attributes
-        assert domain is not None, "Domain must be specified for CrossDomainDataset"
-        self.domain = domain
+        self.DOMAINS = [
+            "matched_concepts", 
+            "matched_instruments_groups",
+            "matched_segments",
+            "release_styles", 
+            "release_genres", 
+            "dvi"]
+        self.verbose = verbose
+        self.label2ids_map = {}
+        self.domains_processed = {}
         self.init_domain_labels()
         if self.verbose:
-            print(f"Cross-domain: {self.domain}")
+            print(f"Cross-domain dataset initialized with domains: {self.DOMAINS}")
 
-    def get_all_multihot(self):
-        return torch.stack(list(self.aux_processed.values()))
-    
-    def get_filter_mask(self, domain_label):
+    @staticmethod
+    def join_sublists(lst, sep=": "):
         """
-        Filter versions based on query and candidate domains.
+        Flattens nested lists/tuples into strings joined by sep.
         """
-        intlabel = self.label2ids[domain_label]
-        return torch.stack(self.domains_processed)[:, intlabel] > 0
-    
-    def get_value_list(self, key: str) -> list:
-        """Get all values for a given key."""
-        return [e[key] for e in list(self.info.values())]
-    
-    def get_label2id_map(self, 
-                         value_list: list, 
-                         keep_nan: bool = False) -> dict:
-        """Get a mapping from label to id for a given key."""
-        labels = []
-        for label in value_list:
-            if isinstance(label, str) and not (label == ''):
-                labels.append(label)
-            elif (isinstance(label, str) and (label == '') or isinstance(label, float) and np.isnan(label)) or label is None:
-                if keep_nan:
-                    labels.append(NAN_LABEL)
-                else:
-                    continue
-            elif isinstance(label, (list, tuple)):
-                for slabel in label:
-                    if isinstance(slabel, str):
-                        labels.append(slabel)
-                    else:
-                        raise ValueError(f"Expected string, got: {type(slabel)}")
-            elif isinstance(label, dict):
-                slabels = self.matches2labels(label)
-                for slabel in slabels:                    
-                    labels.append(slabel)
+        result = []
+        for item in lst:
+            if isinstance(item, (list, tuple)):
+                result.append(sep.join(str(sub) for sub in item))
+            elif isinstance(item, str):
+                result.append(item)
+            elif item is None or (isinstance(item, float) and np.isnan(item)):
+                continue
             else:
-                raise ValueError(f"Expected string or iterable of strings, got: {type(label)}")
-        labels = sorted(set(labels))
-        label2id = {label: idx for idx, label in enumerate(labels)}
-        return label2id
+                result.append(str(item))
+        return result
     
-    def matches2labels(self, match_dict: dict, ignore_cols: list = None, ignore_labels: list = None) -> list:
-        """Transform match dict to list of matched labels."""
+    def init_domain_labels(self):
+        """
+        Initialize all auxiliary domain labels generically.
+        - domains: list of domain keys to process; if None, defaults to standard set.
+        """
+
+        self.label2ids_map = {}
+        self.domains_processed = {}
+
+        for domain in self.DOMAINS:
+            # --- Collect all values for this domain ---
+            tlabels = []
+            for item in self.info.values():
+                val = item.get(domain, None)
+                if isinstance(val, dict):
+                    # convert dict to list of keys
+                    tlabels.append(self.matches2labels(val))
+                elif isinstance(val, (list, tuple)):
+                    # flatten tuples if needed (e.g. release_styles)
+                    tlabels.append([v[1] if isinstance(v, tuple) else v for v in val])
+                else:
+                    # boolean or single value
+                    tlabels.append([val])
+
+            # --- Build label2id mapping ---
+            # NOTE: might look weird in the case of dvi (True/False) but works fine
+            labels = sorted({str(l) for sublist in tlabels for l in sublist if l is not None})
+            self.label2ids_map[domain] = {label: idx for idx, label in enumerate(labels)}
+
+            # --- Build multi-hot tensor per item ---
+            for item_idx, item in enumerate(self.info.values()):
+                row = tlabels[item_idx]  # list of labels
+                ids = [self.label2ids_map[domain][str(l)] for l in row if str(l) in self.label2ids_map[domain]]
+                multi_hot = torch.zeros(len(self.label2ids_map[domain]), dtype=torch.long)
+                if len(ids) > 0:
+                    multi_hot[ids] = 1
+                # store in aux map
+                self.domains_processed.setdefault(item["id"], {})[domain] = multi_hot
+
+        print(f"Processed domains: {list(self.domains_processed[next(iter(self.domains_processed))].keys())}")
+
+    # ------------------- Generic utility functions -------------------
+    def get_value_list(self, key: str) -> list:
+        return [e.get(key, None) for e in self.info.values()]
+
+    def get_label2id_map(self, value_list: list) -> dict:
+        labels = []
+        for val in value_list:
+            if isinstance(val, str) and val != '':
+                labels.append(val)
+            elif isinstance(val, bool):
+                labels.append(val)
+            elif isinstance(val, (list, tuple)):
+                labels.extend([v for v in val if isinstance(v, str)])
+            elif isinstance(val, dict):
+                labels.extend(self.matches2labels(val))
+        labels = sorted(set(labels))
+        return {l: i for i, l in enumerate(labels)}
+
+    @staticmethod
+    def matches2labels(match_dict: dict, ignore_cols: list = None, ignore_labels: list = None) -> list:
         labels = []
         for col, matches in match_dict.items():
             if ignore_cols and col in ignore_cols:
@@ -278,86 +310,54 @@ class CrossDomainDataset(Dataset):
                     continue
                 labels.append(label)
         return labels
-    
+
     @staticmethod
     def ints2multihot(items: list, n: int) -> torch.Tensor:
-        """Encodes a list of integers as a multi-hot tensor."""
         items = torch.tensor(list(set(items)))
         if len(items) > 0:
-            ids = torch.sum(F.one_hot(items, n), axis=0)
-        else:
-            ids = torch.zeros(n)
-        return ids
-    
-    def init_domain_labels(self):
-        """"""
-        self.label2ids = {}
-        self.aux_processed = {}
-        self.cls_weights = {}
-        self.domains_processed = {}
-        tlabels = self.get_value_list(self.domain) 
-        if self.domain == "release_styles":
-            # Special case for release_styles, which is a list of tuples
-            tlabels = self.join_sublists(tlabels, sep=": ")
-        elif self.domain == "country":
-            # TODO: implement
-            pass
-                    
-        self.label2ids = self.get_label2id_map(tlabels, keep_nan=False)
-        
-        tlabels_processed = []
-        for i, row in enumerate(tlabels):
-            # transform string labels to ids
-            ids = []
-            if row is not None and row != np.nan:
-                if isinstance(row, list):
-                    slabels = row
-                elif isinstance(row, dict):
-                    slabels = self.matches2labels(row)
-                for slabel in slabels:
-                    ids.append(self.label2ids[slabel])  # -1 for unknown labels
+            return torch.sum(F.one_hot(items, n), dim=0)
+        return torch.zeros(n)
+
+    # ------------------- Filter by query/candidate -------------------
+    @staticmethod
+    def parse_filter_str(filter_str: str) -> dict:
+        """
+        Parse a filter string into a dictionary.
+        """
+        result = {}
+        if not filter_str:
+            return result
+
+        # Split domains by ';'
+        domain_parts = filter_str.split(";")
+        for part in domain_parts:
+            if ":" not in part:
+                continue
+            key, value_str = part.split(":", 1)
+            key = key.strip()
+            value_str = value_str.strip()
+
+            # Split by ',' if multiple values
+            if "," in value_str:
+                values = [v.strip() for v in value_str.split(",")]
+                result[key] = values
             else:
-                if self.label2ids.get(NAN_LABEL, False):
-                    ids.append(self.label2ids[NAN_LABEL])  # -1 for unknown labels
-            tlabels_processed.append(self.ints2multihot(ids, len(self.label2ids))) 
-        # always keep multi-hot tensor
-        self.domains_processed = torch.stack(tlabels_processed)        
+                # Try to convert to int or float if possible
+                try:
+                    num = int(value_str)
+                    result[key] = num
+                except ValueError:
+                    try:
+                        num = float(value_str)
+                        result[key] = num
+                    except ValueError:
+                        result[key] = value_str
+        return result
 
-        # transform
-        item_keys = [v["id"] for v in self.info.values()]
-        for idx, item_key in tqdm(enumerate(item_keys), desc="Transforming auxiliary data...", total=len(item_keys)):
-            self.aux_processed[item_key] = tlabels_processed[idx]
-        print(f"  Domain labels processed: {len(self.aux_processed):,} items, {len(self.label2ids)} classes")
-
-    def filter_by_domain_pair(self, mode="same", qslabel=None, cslabel=None):
-        doms = self.domains_processed  # [N, D] multi-hot
-        assert mode in ["same", "overlap", "disjoint", "pair", "all"], f"Invalid mode: {mode}"
-        if mode == "pair":
-            assert qslabel is not None and cslabel is not None, "qslabel and cslabel must be specified for 'pair' mode"
-            q_idx = self.label2ids[qslabel]
-            c_idx = self.label2ids[cslabel]
-            assert q_idx is not None and c_idx is not None, f"Labels {qslabel} and {cslabel} must be in label2ids"
-        else:
-            assert qslabel is None and cslabel is None, "qslabel and cslabel must be None for modes other than 'pair'"
-        
-        if mode == "same":
-            mask = (doms == doms).all(dim=1)
-        elif mode == "overlap":
-            mask = (doms.unsqueeze(1) & doms.unsqueeze(0)).any(dim=-1).any(dim=1)
-        elif mode == "disjoint":
-            mask = ~((doms.unsqueeze(1) & doms.unsqueeze(0)).any(dim=-1)).any(dim=1)
-        elif mode == "pair":
-            mask = (doms[:, q_idx] | doms[:, c_idx]).bool()
-        else:
-            mask = torch.ones(len(self), dtype=torch.bool)
-
-        return mask
-
-    def get_domain_mask(
+    def get_filter_mask(
             self,
-            mode: str = "same",
-            qslabel: str = None,
-            cslabel: str = None,
+            query_filter_str: dict | str | None = None,
+            candidate_filter_str: dict | str | None = None,
             query_i: torch.Tensor | list[int] = None,
             cand_i: torch.Tensor | list[int] = None,
             query_c: torch.Tensor | list[int] = None,
@@ -365,78 +365,168 @@ class CrossDomainDataset(Dataset):
             device: torch.device = "cuda"
         ) -> tuple[torch.BoolTensor, torch.Tensor]:
         """
+        Generic pair-mode mask using arbitrary domains. Filters can be dicts or strings.
         Returns:
-            - filtered_mask: [Q_filtered, C] boolean mask of **domain-valid candidates**, 
-            only queries with at least one relevant candidate (_c) are kept.
-            - row_indices: [Q_filtered] indices of queries in the original [Q, C] array.
-
-        Notes:
-            - Self-matches are removed.
-            - Relevance is determined via query_c vs cand_c.
+        - filtered_mask: [Q_filtered, C] boolean mask of candidates allowed by filters
+        - row_indices: indices of queries in the original dataset order (torch.LongTensor)
         """
-        x = self.domains_processed.to(device)  # [N, D] multi-hot
 
-        # --- resolve query subset ---
-        if query_i is not None:
-            q_keys = [self.id2key[int(i)] for i in query_i]
-            key2pos = {k: i for i, k in enumerate(self.info.keys())}
-            q_pos = [key2pos[k] for k in q_keys]
-            q_x = x[q_pos]  # [Q, D]
+        # --- normalize filter inputs to dicts ---
+        if isinstance(query_filter_str, str):
+            query_filter = self.parse_filter_str(query_filter_str)
+        elif isinstance(query_filter_str, dict):
+            query_filter = query_filter_str
         else:
-            q_x = x
+            query_filter = {}
 
-        # --- resolve candidate subset ---
+        if isinstance(candidate_filter_str, str):
+            candidate_filter = self.parse_filter_str(candidate_filter_str)
+        elif isinstance(candidate_filter_str, dict):
+            candidate_filter = candidate_filter_str
+        else:
+            candidate_filter = {}
+
+        # prepare indexing and sizes
+        all_keys = list(self.info.keys())                     # original order keys
+        key2pos = {k: i for i, k in enumerate(all_keys)}
+        N = len(all_keys)
+
+        # resolve query / candidate subsets -> positions in original order
+        if query_i is not None:
+            # query_i are dataset ids/indices that map via id2key -> key -> pos
+            q_keys = [self.id2key[int(i)] for i in query_i]
+            q_pos = [key2pos[k] for k in q_keys]
+        else:
+            q_pos = list(range(N))
+
         if cand_i is not None:
             c_keys = [self.id2key[int(i)] for i in cand_i]
-            key2pos = {k: i for i, k in enumerate(self.info.keys())}
             c_pos = [key2pos[k] for k in c_keys]
-            c_x = x[c_pos]  # [C, D]
         else:
-            c_x = x
+            c_pos = list(range(N))
 
-        if query_c is not None:
-            query_c = query_c.to(device)
-        if cand_c is not None:
-            cand_c = cand_c.to(device)
+        Q = len(q_pos)
+        C = len(c_pos)
 
-        # --- domain mask logic ---
-        assert mode in ["same", "overlap", "disjoint", "pair"], f"Invalid mode: {mode}"
-        if mode == "same":
-            mask = (q_x.unsqueeze(1) == c_x.unsqueeze(0)).all(dim=2)
-        elif mode == "overlap":
-            mask = (q_x @ c_x.T > 0) & ~(q_x.unsqueeze(1) == c_x.unsqueeze(0)).all(dim=2)
-        elif mode == "disjoint":
-            mask = ~(q_x[:, None, :] & c_x[None, :, :]).any(dim=-1)
-        elif mode == "pair":
-            def get_submask(x, slabel):
-                if slabel is None:
-                    return torch.ones(x.shape[0], device=device, dtype=torch.long)
+        # start with all-True mask
+        mask = torch.ones((Q, C), dtype=torch.bool, device=device)
+
+        # domains requested by either filter
+        filter_domains = set(query_filter.keys()) | set(candidate_filter.keys())
+
+        # helper: normalize filter value into a list of tokens (handles single bool/int/str)
+        def normalize_filter_values(v):
+            if v is None:
+                return None
+            if isinstance(v, (list, tuple)):
+                return list(v)
+            return [v]
+
+        # iterate domains from filters; ignore unknown domains gracefully
+        for domain in filter_domains:
+            if domain not in self.label2ids_map:
+                # unknown domain -> skip (alternatively: raise)
+                # print(f"[get_filter_mask] unknown domain '{domain}' -> ignoring")
+                continue
+
+            # number of classes for this domain
+            D = len(self.label2ids_map[domain])
+            if D == 0:
+                # nothing to filter on this domain
+                continue
+
+            # build domain_tensor [N, D] by stacking per-item vectors from self.domains_processed
+            domain_rows = []
+            for k in all_keys:
+                entry = self.domains_processed.get(self.info[k]["id"], None)
+                if entry and domain in entry and entry[domain] is not None:
+                    vec = entry[domain]
+                    # ensure vector is 1D of length D; convert to bool
+                    vec = vec.to(torch.bool).to(device)
+                    # if vec.numel() != D:
+                    #     # if shapes mismatch, try to pad/trim
+                    #     v = torch.zeros(D, dtype=torch.bool, device=device)
+                    #     length = min(vec.numel(), D)
+                    #     v[:length] = vec.view(-1)[:length].to(device).to(torch.bool)
+                    #     vec = v
                 else:
-                    idx = self.label2ids[slabel]
-                    return x[:, idx]
-            q_sub = get_submask(q_x, qslabel)  # [Q, |q_idx|]
-            c_sub = get_submask(c_x, cslabel)  # [C, |
-            mask = q_sub.bool().unsqueeze(1) & c_sub.bool().unsqueeze(0)
+                    vec = torch.zeros(D, dtype=torch.bool, device=device)
+                domain_rows.append(vec)
+            domain_tensor = torch.stack(domain_rows, dim=0)  # [N, D]
 
-        # --- remove self matches ---
+            # now build pair mask for this domain for the chosen subsets q_pos / c_pos
+            q_x = domain_tensor[q_pos]  # [Q, D]
+            c_x = domain_tensor[c_pos]  # [C, D]
+
+            # get requested filter values for this domain
+            q_vals = normalize_filter_values(query_filter.get(domain, None))
+            c_vals = normalize_filter_values(candidate_filter.get(domain, None))
+
+            # helper: convert label token -> indices in label2ids_map[domain]
+            def label_tokens_to_indices(tokens):
+                if tokens is None:
+                    return []
+                idxs = []
+                mapdict = self.label2ids_map[domain]
+                for t in tokens:
+                    # try direct membership (works for bools/ints/strings stored as keys)
+                    if t in mapdict:
+                        idxs.append(mapdict[t])
+                        continue
+                    # try str conversion
+                    ts = str(t)
+                    if ts in mapdict:
+                        idxs.append(mapdict[ts])
+                        continue
+                    # try numeric -> string fallback (e.g. label "1")
+                    # ignore if not found
+                return sorted(set(idxs))
+
+            q_idxs = label_tokens_to_indices(q_vals)
+            c_idxs = label_tokens_to_indices(c_vals)
+
+            # submask creation: if no filter values specified for side -> allow all
+            def submask_matrix(x, idxs):
+                # x: [rows, D]
+                if not idxs:
+                    return torch.ones(x.shape[0], dtype=torch.bool, device=device)
+                cols = x[:, idxs]    # [rows, len(idxs)]
+                return cols.any(dim=1)  # [rows]
+
+            q_mask = submask_matrix(q_x, q_idxs)  # [Q]
+            c_mask = submask_matrix(c_x, c_idxs)  # [C]
+
+            domain_pair_mask = q_mask.unsqueeze(1) & c_mask.unsqueeze(0)  # [Q, C]
+            mask &= domain_pair_mask
+
+        # remove self matches if both query_i and cand_i were provided
         if query_i is not None and cand_i is not None:
-            q_idx = torch.as_tensor(query_i, device=device)
-            c_idx = torch.as_tensor(cand_i, device=device)
-            self_mask = q_idx[:, None] == c_idx[None, :]
+            # use original provided ids for equality comparison (keeps prior behavior)
+            q_idx_tensor = torch.as_tensor(list(query_i), device=device)
+            c_idx_tensor = torch.as_tensor(list(cand_i), device=device)
+            self_mask = q_idx_tensor[:, None] == c_idx_tensor[None, :]
             mask &= ~self_mask
 
-        # --- filter rows: keep only queries with at least one relevant candidate ---
+        # relevance filtering: keep rows with at least one relevant candidate and at least one non-relevant (exclude no-rel and all-rel)
         if query_c is not None and cand_c is not None:
-            # relevance per query/candidate
+            query_c = query_c.to(device)
+            cand_c = cand_c.to(device)
             rel_mask = query_c[:, None] == cand_c[None, :]
-            # only consider candidates allowed by domain mask
+            # consider only candidates allowed by domain mask
             rel_mask &= mask
-            has_rel = rel_mask.any(dim=1)
+            # keep only queries that have at least one relevant AND at least one non-relevant
+            has_rel = rel_mask.any(dim=1) & (~rel_mask).any(dim=1)
         else:
-            # fallback: just keep all queries with at least one candidate
-            has_rel = mask.any(dim=1)
+            # fallback: keep queries that have at least one allowed candidate and at least one disallowed
+            has_rel = mask.any(dim=1) & (~mask).any(dim=1)
 
-        row_indices = torch.nonzero(has_rel).squeeze(1)  # indices in original
-        filtered_mask = mask[has_rel]  # [Q_filtered, C] only domain-valid candidates
+        # map local indices back to original positions
+        if len(has_rel) == 0:
+            row_indices = torch.empty(0, dtype=torch.long, device=device)
+            filtered_mask = mask[has_rel]
+        else:
+            local_idxs = torch.where(has_rel)[0]  # indices into q_pos (0..Q-1)
+            row_indices = torch.as_tensor(q_pos, dtype=torch.long, device=device)[local_idxs]  # positions in original order
+            filtered_mask = mask[local_idxs, :]  # [Q_filtered, C]
 
         return filtered_mask, row_indices

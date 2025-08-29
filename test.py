@@ -31,14 +31,10 @@ if "path_meta" not in args:
     args.path_meta = None
 if "partition" not in args:
     args.partition = "test"
-if "domain" not in args:
-    args.domain = None
-if "domain_mode" not in args:
-    args.domain_mode = None
-if "qsdomain" not in args:
-    args.qsdomain = None
-if "csdomain" not in args:
-    args.csdomain = None
+if "qfilter" not in args:
+    args.qfilter = None
+if "cfilter" not in args:
+    args.cfilter = None
 if "limit_num" not in args:
     args.limit_num = None
 
@@ -112,14 +108,10 @@ if args.path_audio is not None:
 if args.path_meta is not None:
     conf.path.meta = args.path_meta
 conf.data.path = conf.path
-
 # Get dataset
-is_cross_domain = args.domain is not None
-is_domain_to_domain = (args.qsdomain is not None or args.csdomain is not None)
-if is_cross_domain:
-    myprint(f"Using cross-domain dataset with domain {args.domain}...")
-    dset = dataset.CrossDomainDataset(
-        args.domain,
+is_filtered = (args.qfilter is not None or args.cfilter is not None)
+if is_filtered:
+    dset = dataset.FilterableDataset(
         conf.data,
         args.partition,
         augment=False,
@@ -128,11 +120,8 @@ if is_cross_domain:
         limit_cliques=args.limit_num,
         checks=False, 
     )
-    if is_domain_to_domain:
-        eval_name = f"{args.qsdomain}-to-{args.csdomain}"
-    else:
-        myprint(f"Using domain mode {args.domain_mode}...")
-        eval_name = f"{args.domain}_{args.domain_mode}"
+    eval_name = f"{args.qfilter}-to-{args.cfilter}"
+    myprint(f"Using filtered dataset with {eval_name}...")
 
 else:
     myprint("Using normal dataset...")
@@ -334,21 +323,14 @@ def evaluate(batch_size_candidates=2**15):
     cand_i = torch.cat(torch.unbind(cand_i, dim=0), dim=0)
     cand_z = torch.cat(torch.unbind(cand_z, dim=0), dim=0)
     cand_m = torch.cat(torch.unbind(cand_m, dim=0), dim=0)
-    if is_cross_domain:
-        if is_domain_to_domain:
-            dom_mask, valid_queries = dset.get_domain_mask(mode="pair", 
-                                            qslabel=args.qsdomain, 
-                                            cslabel=args.csdomain,
-                                            query_i=query_i, 
-                                            cand_i=cand_i,
-                                            query_c=query_c, 
-                                            cand_c=cand_c)
-        else:
-            dom_mask, valid_queries = dset.get_domain_mask(mode=args.domain_mode, 
-                                            query_i=query_i, 
-                                            cand_i=cand_i,
-                                            query_c=query_c, 
-                                            cand_c=cand_c)
+    if is_filtered:
+        dom_mask, valid_queries = dset.get_filter_mask( 
+                                        query_filter_str=args.qfilter if "qfilter" in args else None, 
+                                        candidate_filter_str=args.cfilter if "cfilter" in args else None,
+                                        query_i=query_i, 
+                                        cand_i=cand_i,
+                                        query_c=query_c, 
+                                        cand_c=cand_c)
         if valid_queries.numel() == 0:
             myprint("No elements for this domain evaluation.")
             sys.exit(0)
@@ -359,11 +341,8 @@ def evaluate(batch_size_candidates=2**15):
     # Evaluate
     step = 0
     total_saved = 0
-    buffer = {"clique": [], "index": [], "aps": [], "r1s": [], "rpcs": [], "ncands": [], "nrel": []}
-    if dom_mask is None:
-        outpath = os.path.join(metrics_path, f"measures_{fabric.global_rank}.h5")
-    else:
-        outpath = os.path.join(metrics_path, f"measures_{args.domain_mode}_{fabric.global_rank}.h5")
+    buffer = {"clique": [], "index": [], "aps": [], "r1s": [], "rpcs": [], "ncands": [], "nrel": [], "nrel_per_cand": []}
+    outpath = os.path.join(metrics_path, f"measures_{eval_name}_{fabric.global_rank}.h5")
 
     for row_idx, n in enumerate(valid_queries.tolist()):
         ap, r1, rpc = eval.compute(
@@ -390,6 +369,7 @@ def evaluate(batch_size_candidates=2**15):
         buffer["ncands"].append(cur_ncands.cpu())
         cur_nrel = (query_c[n] == cand_c[dom_mask[row_idx]] if dom_mask is not None else query_c[row_idx] == cand_c).sum()
         buffer["nrel"].append(cur_nrel.unsqueeze(0).cpu())
+        buffer["nrel_per_cand"].append((cur_nrel.cpu() / cur_ncands.cpu()).unsqueeze(0).cpu())
         if outpath is not None and (step + 1) % 1000 == 0 or step == len(query_z) - 1:
             file_utils.save_to_hdf5(
                 outpath,
@@ -400,7 +380,8 @@ def evaluate(batch_size_candidates=2**15):
                     "r1s": torch.cat(buffer["r1s"], dim=0),
                     "rpcs": torch.cat(buffer["rpcs"], dim=0),
                     "ncands": torch.cat(buffer["ncands"], dim=0),
-                    "nrel": torch.cat(buffer["nrel"], dim=0)
+                    "nrel": torch.cat(buffer["nrel"], dim=0),
+                    "nrel_per_cand": torch.cat(buffer["nrel_per_cand"], dim=0)
                 },
                 batch_start=total_saved,
                 hop=args.qshop,
@@ -413,18 +394,21 @@ def evaluate(batch_size_candidates=2**15):
         rpcs = torch.stack(buffer["rpcs"])
         ncands = torch.stack(buffer["ncands"])
         nrel = torch.stack(buffer["nrel"])
+        nrel_per_cand = torch.stack(buffer["nrel_per_cand"])
         # Collect measures from all GPUs + collapse to batch dim
         fabric.barrier()
         aps = fabric.all_gather(aps)
         r1s = fabric.all_gather(r1s)
         rpcs = fabric.all_gather(rpcs)
         ncands = fabric.all_gather(ncands)
-        nrel = fabric.all_gather(nrel)   
+        nrel = fabric.all_gather(nrel)
+        nrel_per_cand = fabric.all_gather(nrel_per_cand)
         aps = torch.cat(torch.unbind(aps, dim=0), dim=0)
         r1s = torch.cat(torch.unbind(r1s, dim=0), dim=0)
         rpcs = torch.cat(torch.unbind(rpcs, dim=0), dim=0)
         ncands = torch.cat(torch.unbind(ncands, dim=0), dim=0)
         nrel = torch.cat(torch.unbind(nrel, dim=0), dim=0)
+        nrel_per_cand = torch.cat(torch.unbind(nrel_per_cand, dim=0), dim=0)
         
     ###############################################################################
 
@@ -452,6 +436,12 @@ def evaluate(batch_size_candidates=2**15):
         logdict_stats["nRel_std"] = nrel.float().std().item()
         logdict_stats["nRel_min"] = nrel.float().min().int().item()
         logdict_stats["nRel_max"] = nrel.float().max().int().item()
+        logdict_stats["nRelPerCand_median"] = nrel_per_cand.float().median().item()
+        logdict_stats["nRelPerCand_mean"] = nrel_per_cand.float().mean().item()
+        logdict_stats["nRelPerCand_std"] = nrel_per_cand.float().std().item()
+        logdict_stats["nRelPerCand_min"] = nrel_per_cand.float().min().item()
+        logdict_stats["nRelPerCand_max"] = nrel_per_cand.float().max().item()
+
     logdict_ci = {
         # confidence intervals for evaluation measures
         "MAP": 1.96 * aps.std() / math.sqrt(len(aps)),
@@ -465,12 +455,8 @@ def evaluate(batch_size_candidates=2**15):
     myprint("  Stats\n" + print_utils.report(logdict_stats, sep="\n", clean_line=False))
     myprint("=" * 100)
 
-if args.domain is not None:
-    myprint(f"Evaluating cross-domain dataset with domain {args.domain}...")
-    if args.domain_mode is not None:
-        print(f"Results for {args.domain_mode} domains:")
-    elif args.qsdomain is not None and args.csdomain is not None:
-        print(f"Results for {args.qsdomain}-to-{args.csdomain}:")
+if is_filtered:
+    myprint(f"Evaluating filtered dataset with {eval_name}...")
 else:
         print("Overall results:")
 
