@@ -80,14 +80,15 @@ python test.py jobname=test-script checkpoint=logs/dvi2fm_light-clews/checkpoint
 ```
 
 #### Cross-Domain Testing
-We recommend to run overall tests first. Then, set `domain` and `domain_mode` or `domain` and `qsdomain`, `csdomain` respectively. For instance, you can use our provided bash script `test_conceptwise.sh`:
+We recommend to run overall tests first. Then, set the filters accordingly. An example is given with our bash script, which you can run like (with *DVI* versions as queries):
 ```
-test_conceptwise.sh JOBNAME DATASET_TRAIN DATASET_TEST MODEL NNODES NGPUS
+test_conceptwise_dvi.sh JOBNAME DATASET_TRAIN DATASET_TEST MODEL NNODES NGPUS
 ```
 like:
 ```
-test_conceptwise.sh bytecover2x-dvi2 dvi2 divers bytecover2x 1 2
+test_conceptwise_dvi.sh bytecover2x-dvi2 dvi2 divers bytecover2x 1 2
 ```
+If alternatively you want to use *YouTube Music* versions as query, check the script `test_conceptwise_ytm.sh`.
 ## License
 
 The code in this repository is released under the MIT license as found in the [LICENSE file](LICENSE).
