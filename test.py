@@ -281,7 +281,7 @@ def evaluate(batch_size_candidates=2**15):
     query_z = query_z.half()
     
     if not need_seperate_candidates:
-        myprint("Cand emb: (copy)")
+        myprint("Copying candidate embeddings...")
         cand_c, cand_i, cand_z, cand_m = (
             query_c.clone(),
             query_i.clone(),
@@ -312,31 +312,38 @@ def evaluate(batch_size_candidates=2**15):
         cand_z = cand_z.half()
     
     # Collect candidates from all GPUs + collapse to batch dim
+    print("Fabric barrier...")
     fabric.barrier()
+    print("Gathering tensors...")
     cand_c = fabric.all_gather(cand_c)
     cand_i = fabric.all_gather(cand_i)
     cand_z = fabric.all_gather(cand_z)
     cand_m = fabric.all_gather(cand_m)
-
+    print("Tensors gathered.")
+    
     # Collapse to batch dim
+    print("Collapsing tensors...")
     cand_c = torch.cat(torch.unbind(cand_c, dim=0), dim=0)
     cand_i = torch.cat(torch.unbind(cand_i, dim=0), dim=0)
     cand_z = torch.cat(torch.unbind(cand_z, dim=0), dim=0)
     cand_m = torch.cat(torch.unbind(cand_m, dim=0), dim=0)
+    print("Tensors collapsed.")
     if is_filtered:
-        dom_mask, valid_queries = dset.get_filter_mask( 
+        print("Getting filter masks...")
+        dom_mask, valid_query_idxs = dset.get_filter_mask( 
                                         query_filter_str=args.qfilter if "qfilter" in args else None, 
                                         candidate_filter_str=args.cfilter if "cfilter" in args else None,
                                         query_i=query_i, 
-                                        cand_i=cand_i,
+                                        cand_i=cand_i.to(query_i.device),
                                         query_c=query_c, 
-                                        cand_c=cand_c)
-        if valid_queries.numel() == 0:
+                                        cand_c=cand_c.to(query_c.device),)
+        print("Filter masks obtained.")
+        if valid_query_idxs.numel() == 0:
             myprint("No elements for this domain evaluation.")
             sys.exit(0)
     else:
         dom_mask = None
-        valid_queries = torch.arange(len(query_z))
+        valid_query_idxs = torch.arange(len(query_z))
 
     # Evaluate
     step = 0
@@ -344,30 +351,31 @@ def evaluate(batch_size_candidates=2**15):
     buffer = {"clique": [], "index": [], "aps": [], "r1s": [], "rpcs": [], "ncands": [], "nrel": [], "nrel_per_cand": []}
     outpath = os.path.join(metrics_path, f"measures_{eval_name}_{fabric.global_rank}.h5")
 
-    for row_idx, n in enumerate(valid_queries.tolist()):
-        ap, r1, rpc = eval.compute(
+    print(f"Evaluating {len(valid_query_idxs)} queries...")
+    for i_filtered, i in enumerate(valid_query_idxs.tolist()):
+        ap, r1, rpc, match_clique = eval.compute(
             model,
-            query_c[n : n + 1],
-            query_i[n : n + 1],
-            query_z[n : n + 1],
-            cand_c[dom_mask[row_idx]] if dom_mask is not None else cand_c,
-            cand_i[dom_mask[row_idx]] if dom_mask is not None else cand_i,
-            cand_z[dom_mask[row_idx]] if dom_mask is not None else cand_z,
-            queries_m=query_m[n : n + 1],
-            candidates_m=cand_m[dom_mask[row_idx]] if dom_mask is not None else cand_m,
+            query_c[i : i + 1],
+            query_i[i : i + 1],
+            query_z[i : i + 1],
+            cand_c[dom_mask[i_filtered]] if dom_mask is not None else cand_c,
+            cand_i[dom_mask[i_filtered]] if dom_mask is not None else cand_i,
+            cand_z[dom_mask[i_filtered]] if dom_mask is not None else cand_z,
+            queries_m=query_m[i : i + 1],
+            candidates_m=cand_m[dom_mask[i_filtered]] if dom_mask is not None else cand_m,
             redux_strategy=args.redux,
             batch_size_candidates=batch_size_candidates,
         )
 
         # Move to CPU immediately
-        buffer["clique"].append(query_c[n : n + 1].cpu())
-        buffer["index"].append(query_i[n : n + 1].cpu())
+        buffer["clique"].append(query_c[i : i + 1].cpu())
+        buffer["index"].append(query_i[i : i + 1].cpu())
         buffer["aps"].append(ap.cpu())
         buffer["r1s"].append(r1.cpu())
         buffer["rpcs"].append(rpc.cpu())
-        cur_ncands = torch.tensor([torch.sum(dom_mask[row_idx], dtype=torch.int32)]) if dom_mask is not None else torch.tensor([len(cand_i)])
+        cur_ncands = torch.tensor([torch.sum(dom_mask[i_filtered], dtype=torch.int32)]) if dom_mask is not None else torch.tensor([len(cand_i)])
         buffer["ncands"].append(cur_ncands.cpu())
-        cur_nrel = (query_c[n] == cand_c[dom_mask[row_idx]] if dom_mask is not None else query_c[row_idx] == cand_c).sum()
+        cur_nrel = match_clique.sum().to(torch.int32)
         buffer["nrel"].append(cur_nrel.unsqueeze(0).cpu())
         buffer["nrel_per_cand"].append((cur_nrel.cpu() / cur_ncands.cpu()).unsqueeze(0).cpu())
         if outpath is not None and (step + 1) % 1000 == 0 or step == len(query_z) - 1:
@@ -411,7 +419,8 @@ def evaluate(batch_size_candidates=2**15):
         nrel_per_cand = torch.cat(torch.unbind(nrel_per_cand, dim=0), dim=0)
         
     ###############################################################################
-
+    print("Query-wise evaluation done.")
+    
     # Print
     logdict_mean = {
         # evaluation measures
@@ -419,28 +428,24 @@ def evaluate(batch_size_candidates=2**15):
         "MR1": r1s.mean(),
         "ARP": rpcs.mean(),
     }
-    logdict_stats = {
-        # number of queries
-        "nQs": len(aps), 
-    }
-    if dom_mask is not None:
-        # stats about number of candidates 
-        logdict_stats["nCs_median"] = ncands.float().median().int().item()
-        logdict_stats["nCs_mean"] = ncands.float().mean().item()
-        logdict_stats["nCs_std"] = ncands.float().std().item()
-        logdict_stats["nCs_min"] = ncands.float().min().int().item()
-        logdict_stats["nCs_max"] = ncands.float().max().int().item()
-        # stats about number of relevant candidates
-        logdict_stats["nRel_median"] = nrel.float().median().int().item()
-        logdict_stats["nRel_mean"] = nrel.float().mean().item()
-        logdict_stats["nRel_std"] = nrel.float().std().item()
-        logdict_stats["nRel_min"] = nrel.float().min().int().item()
-        logdict_stats["nRel_max"] = nrel.float().max().int().item()
-        logdict_stats["nRelPerCand_median"] = nrel_per_cand.float().median().item()
-        logdict_stats["nRelPerCand_mean"] = nrel_per_cand.float().mean().item()
-        logdict_stats["nRelPerCand_std"] = nrel_per_cand.float().std().item()
-        logdict_stats["nRelPerCand_min"] = nrel_per_cand.float().min().item()
-        logdict_stats["nRelPerCand_max"] = nrel_per_cand.float().max().item()
+    logdict_stats = {}
+    logdict_stats["nQs"] = len(aps)
+    logdict_stats["nCs_median"] = ncands.float().median().int().item()
+    logdict_stats["nCs_mean"] = ncands.float().mean().item()
+    logdict_stats["nCs_std"] = ncands.float().std().item()
+    logdict_stats["nCs_min"] = ncands.float().min().int().item()
+    logdict_stats["nCs_max"] = ncands.float().max().int().item()
+    # stats about number of relevant candidates
+    logdict_stats["nRel_median"] = nrel.float().median().int().item()
+    logdict_stats["nRel_mean"] = nrel.float().mean().item()
+    logdict_stats["nRel_std"] = nrel.float().std().item()
+    logdict_stats["nRel_min"] = nrel.float().min().int().item()
+    logdict_stats["nRel_max"] = nrel.float().max().int().item()
+    logdict_stats["nRelPerCand_median"] = nrel_per_cand.float().median().item()
+    logdict_stats["nRelPerCand_mean"] = nrel_per_cand.float().mean().item()
+    logdict_stats["nRelPerCand_std"] = nrel_per_cand.float().std().item()
+    logdict_stats["nRelPerCand_min"] = nrel_per_cand.float().min().item()
+    logdict_stats["nRelPerCand_max"] = nrel_per_cand.float().max().item()
 
     logdict_ci = {
         # confidence intervals for evaluation measures

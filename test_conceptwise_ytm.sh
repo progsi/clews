@@ -27,5 +27,5 @@ for cs in "${csdomains[@]}"; do
         nnodes="$NNODES" \
         ngpus="$NGPUS" \
         qfilter="matched_concepts:youtube_music" \
-        csdomain="matched_concepts:$cs"
+        cfilter=matched_concepts:"$cs"
 done

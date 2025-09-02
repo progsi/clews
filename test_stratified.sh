@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ===== Parse CLI args =====
-JOBNAME=$1
+JOBNAME_PRE=$1
 DATASET_TRAIN=$2
 DATASET_TEST=$3
 MODEL=$4
@@ -15,13 +15,24 @@ fi
 
 MODELSUB="${DATASET_TRAIN}-${MODEL}"
 
+echo "Scanning directory: $DATASET_TEST"
+
 # Get array of files (only files, not directories)
 FILES=()
-for f in "$DATASET_TEST"/*; do
-    [ -f "$f" ] && FILES+=("$f")
+for f in "cache/$DATASET_TEST"/*; do
+    if [ -f "$f" ]; then
+        echo "Found file: $f"
+        FILES+=("$f")
+    fi
 done
+
+echo "Total files found: ${#FILES[@]}"
 # Job
 for FILE in "${FILES[@]}"; do
+    BASENAME=$(basename "$FILE")         # remove path
+    NAME="${BASENAME%.*}"               # remove extension
+    FLOAT=$(echo "$NAME" | grep -oP '[0-9]+(\.[0-9]+)?$')
+    JOBNAME="${JOBNAME_PRE}_${FLOAT}"
     python test.py \
         jobname="${JOBNAME}" \
         checkpoint="logs/${MODELSUB}/checkpoint_best.ckpt" \

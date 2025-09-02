@@ -67,7 +67,7 @@ def compute(
     aps = torch.stack(aps)
     r1s = torch.stack(r1s)
     rpcs = torch.stack(rpcs)
-    return aps, r1s, rpcs
+    return aps, r1s, rpcs, match_clique
 
 
 ###################################################################################################
