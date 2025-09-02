@@ -669,7 +669,7 @@ class FilterableDataset(Dataset):
         total_elements = Q * C
 
         if total_elements > threshold:
-            print(f"[INFO] Using batchwise version: Q*C={total_elements} > threshold={threshold}")
+            print(f"Using batchwise version: Q*C={total_elements} > threshold={threshold}")
             return self.get_filter_mask_batchwise(
                 query_filter_str=query_filter_str,
                 candidate_filter_str=candidate_filter_str,
@@ -681,7 +681,7 @@ class FilterableDataset(Dataset):
                 batch_size=batch_size
             )
         else:
-            print(f"[INFO] Using full version: Q*C={total_elements} <= threshold={threshold}")
+            print(f"Using full version: Q*C={total_elements} <= threshold={threshold}")
             return self.get_filter_mask_full(
                 query_filter_str=query_filter_str,
                 candidate_filter_str=candidate_filter_str,
