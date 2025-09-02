@@ -613,6 +613,7 @@ class FilterableDataset(Dataset):
             # batchwise combination
             for start in range(0, Q, batch_size):
                 end = min(start + batch_size, Q)
+                mask = mask.to(q_mask.device)   # ensure mask is on GPU
                 mask[start:end] &= q_mask[start:end, None] & c_mask[None, :].to(q_mask.device)
 
         # --- self matches (batchwise) ---
@@ -621,7 +622,8 @@ class FilterableDataset(Dataset):
             c_idx_tensor = torch.as_tensor(list(cand_i), device=device)
             for start in range(0, Q, batch_size):
                 end = min(start + batch_size, Q)
-                mask[start:end] &= ~(q_idx_tensor[start:end, None] == c_idx_tensor[None, :])
+                mask = mask.to(q_idx_tensor.device)   # ensure mask is on GPU
+                mask[start:end] &= ~(q_idx_tensor[start:end, None] == c_idx_tensor[None, :]).to(q_idx_tensor.device)
 
         # --- relevance filtering (batchwise) ---
         if query_c is not None and cand_c is not None:
