@@ -134,7 +134,7 @@ else:
         limit_cliques=args.limit_num,
         checks=False, 
     )
-    eval_name = ""
+    eval_name = "overall"
 
 dloader = torch.utils.data.DataLoader(
     dset,
@@ -349,7 +349,7 @@ def evaluate(batch_size_candidates=2**15):
     step = 0
     total_saved = 0
     buffer = {"clique": [], "index": [], "aps": [], "r1s": [], "rpcs": [], "ncands": [], "nrel": [], "nrel_per_cand": []}
-    outpath = os.path.join(metrics_path, f"measures_{eval_name}_{fabric.global_rank}.h5")
+    outpath = os.path.join(metrics_path, f"measures_{fabric.global_rank}.h5")
 
     print(f"Evaluating {len(valid_query_idxs)} queries...")
     for i_filtered, i in enumerate(valid_query_idxs.tolist()):
