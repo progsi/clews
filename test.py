@@ -120,7 +120,9 @@ if is_filtered:
         limit_cliques=args.limit_num,
         checks=False, 
     )
-    eval_name = f"{args.qfilter}-to-{args.cfilter}"
+    qfilter_name = args.qfilter if args.qfilter is not None else "all"
+    cfilter_name = args.cfilter if args.cfilter is not None else "all"
+    eval_name = f"{qfilter_name}-to-{cfilter_name}"
     myprint(f"Using filtered dataset with {eval_name}...")
 
 else:
@@ -149,7 +151,7 @@ dloader = fabric.setup_dataloaders(dloader)
 # Set save path
 test_subset = args.jobname.split("-")[-1]
 sub_path = f"hs{args.qshop}ws{args.qslen}" if not (args.qslen is None or args.qshop is None) else "full_track"
-save_path = os.path.join(log_path, test_subset, sub_path, "results")
+save_path = os.path.join(log_path, "results", test_subset, sub_path)
 metrics_path = os.path.join(save_path, eval_name)
 os.makedirs(metrics_path, exist_ok=True)
 
