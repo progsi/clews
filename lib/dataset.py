@@ -361,6 +361,48 @@ class FilterableDataset(Dataset):
                         result[key] = value_str
         return result
 
+    # helper: normalize filter value into a list of tokens (handles single bool/int/str)
+    @staticmethod
+    def normalize_filter_values(v):
+        if v is None:
+            return None
+        if isinstance(v, (list, tuple)):
+            return list(v)
+        return [v]
+
+    # helper: convert label token -> indices in label2ids_map[domain]
+    def label_tokens_to_indices(self, tokens, domain):
+        if tokens is None:
+            return []
+        idxs = []
+        mapdict = self.label2ids_map[domain]
+        D = len(self.label2ids_map[domain])
+        for t in tokens:
+            # try direct membership (works for bools/ints/strings stored as keys)
+            if t in mapdict:
+                idxs.append(mapdict[t])
+                continue
+            # try str conversion
+            ts = str(t)
+            if ts in mapdict:
+                idxs.append(mapdict[ts])
+                continue
+            # label is idx
+            if isinstance(t, int) and 0 <= t < D:
+                idxs.append(t)
+                continue
+            # ignore if not found
+        return sorted(set(idxs))
+    
+    # submask creation: if no filter values specified for side -> allow all
+    @staticmethod
+    def submask_matrix(x, idxs, device="cuda"):
+        # x: [rows, D]
+        if not idxs:
+            return torch.ones(x.shape[0], dtype=torch.bool, device=device)
+        cols = x[:, idxs]    # [rows, len(idxs)]
+        return cols.any(dim=1)  # [rows]
+    
     def get_filter_mask_full(
                 self,
                 query_filter_str: dict | str | None = None,
@@ -418,19 +460,11 @@ class FilterableDataset(Dataset):
             # domains requested by either filter
             filter_domains = set(query_filter.keys()) | set(candidate_filter.keys())
 
-            # helper: normalize filter value into a list of tokens (handles single bool/int/str)
-            def normalize_filter_values(v):
-                if v is None:
-                    return None
-                if isinstance(v, (list, tuple)):
-                    return list(v)
-                return [v]
-
             # iterate domains from filters; ignore unknown domains gracefully
             for domain in filter_domains:
                 if domain not in self.label2ids_map:
                     # unknown domain -> skip (alternatively: raise)
-                    # print(f"[get_filter_mask] unknown domain '{domain}' -> ignoring")
+                    print(f"[get_filter_mask] unknown domain '{domain}' -> ignoring")
                     continue
 
                 # number of classes for this domain
@@ -446,45 +480,17 @@ class FilterableDataset(Dataset):
                 c_x = domain_tensor[c_pos]  # [C, D]
 
                 # get requested filter values for this domain
-                q_vals = normalize_filter_values(query_filter.get(domain, None))
-                c_vals = normalize_filter_values(candidate_filter.get(domain, None))
+                q_vals = self.normalize_filter_values(query_filter.get(domain, None))
+                c_vals = self.normalize_filter_values(candidate_filter.get(domain, None))
 
-                # helper: convert label token -> indices in label2ids_map[domain]
-                def label_tokens_to_indices(tokens):
-                    if tokens is None:
-                        return []
-                    idxs = []
-                    mapdict = self.label2ids_map[domain]
-                    for t in tokens:
-                        # try direct membership (works for bools/ints/strings stored as keys)
-                        if t in mapdict:
-                            idxs.append(mapdict[t])
-                            continue
-                        # try str conversion
-                        ts = str(t)
-                        if ts in mapdict:
-                            idxs.append(mapdict[ts])
-                            continue
-                        # try numeric -> string fallback (e.g. label "1")
-                        # ignore if not found
-                    return sorted(set(idxs))
+                q_idxs = self.label_tokens_to_indices(q_vals, domain)
+                c_idxs = self.label_tokens_to_indices(c_vals, domain)
 
-                q_idxs = label_tokens_to_indices(q_vals)
-                c_idxs = label_tokens_to_indices(c_vals)
-
-                # submask creation: if no filter values specified for side -> allow all
-                def submask_matrix(x, idxs):
-                    # x: [rows, D]
-                    if not idxs:
-                        return torch.ones(x.shape[0], dtype=torch.bool, device=device)
-                    cols = x[:, idxs]    # [rows, len(idxs)]
-                    return cols.any(dim=1)  # [rows]
-
-                q_mask = submask_matrix(q_x, q_idxs)  # [Q]
-                c_mask = submask_matrix(c_x, c_idxs)  # [C]
+                q_mask = self.submask_matrix(q_x, q_idxs, device)  # [Q]
+                c_mask = self.submask_matrix(c_x, c_idxs, device)  # [C]
 
                 domain_pair_mask = q_mask.unsqueeze(1) & c_mask.unsqueeze(0).to(q_mask.device)  # [Q, C]
-                mask = mask & domain_pair_mask
+                mask = mask & domain_pair_mask.to(mask.device)
 
             # set diagonal (self-matches) to False
             if query_i is not None and cand_i is not None:
@@ -561,13 +567,6 @@ class FilterableDataset(Dataset):
         # --- domain filtering (batchwise) ---
         filter_domains = set(query_filter.keys()) | set(candidate_filter.keys())
 
-        def normalize_filter_values(v):
-            if v is None:
-                return None
-            if isinstance(v, (list, tuple)):
-                return list(v)
-            return [v]
-
         for domain in filter_domains:
             if domain not in self.label2ids_map:
                 continue
@@ -581,34 +580,14 @@ class FilterableDataset(Dataset):
             q_x = domain_tensor[q_pos]
             c_x = domain_tensor[c_pos]
 
-            q_vals = normalize_filter_values(query_filter.get(domain, None))
-            c_vals = normalize_filter_values(candidate_filter.get(domain, None))
+            q_vals = self.normalize_filter_values(query_filter.get(domain, None))
+            c_vals = self.normalize_filter_values(candidate_filter.get(domain, None))
 
-            def label_tokens_to_indices(tokens):
-                if tokens is None:
-                    return []
-                idxs = []
-                mapdict = self.label2ids_map[domain]
-                for t in tokens:
-                    if t in mapdict:
-                        idxs.append(mapdict[t])
-                        continue
-                    ts = str(t)
-                    if ts in mapdict:
-                        idxs.append(mapdict[ts])
-                return sorted(set(idxs))
+            q_idxs = self.label_tokens_to_indices(q_vals, domain)
+            c_idxs = self.label_tokens_to_indices(c_vals, domain)
 
-            q_idxs = label_tokens_to_indices(q_vals)
-            c_idxs = label_tokens_to_indices(c_vals)
-
-            def submask_matrix(x, idxs):
-                if not idxs:
-                    return torch.ones(x.shape[0], dtype=torch.bool, device=device)
-                cols = x[:, idxs]
-                return cols.any(dim=1)
-
-            q_mask = submask_matrix(q_x, q_idxs)
-            c_mask = submask_matrix(c_x, c_idxs)
+            q_mask = self.submask_matrix(q_x, q_idxs, device=device)
+            c_mask = self.submask_matrix(c_x, c_idxs, device=device)
 
             # batchwise combination
             for start in range(0, Q, batch_size):
