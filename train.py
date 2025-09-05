@@ -270,7 +270,7 @@ def valid_loop(desc=None):
     all_z = torch.cat(torch.unbind(all_z, dim=0), dim=0)
     # Eval kNN
     myprint("Eval... ", end="")
-    aps, r1s, rpcs = eval.compute(
+    aps, r1s, rpcs, match_clique = eval.compute(
         model,
         queries_c,
         queries_i,
