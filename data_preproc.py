@@ -9,7 +9,7 @@ from utils import file_utils, audio_utils, print_utils
 
 parser = argparse.ArgumentParser()
 parser.add_argument(
-    "--dataset", type=str, choices=["SHS100K", "covers80", "DiscogsVI", "DiscogsVI2", "DVI2"], required=True
+    "--dataset", type=str, choices=["SHS100K", "covers80", "DiscogsVI", "DVI", "DiscogsVI2", "DVI2"], required=True
 )
 parser.add_argument("--path_meta", type=str, default="data/xxx", required=True)
 parser.add_argument("--path_audio", type=str, default="data/yyy", required=True)
@@ -100,7 +100,7 @@ timer = print_utils.Timer()
 
 # Load cliques and splits
 print(f"Load {args.dataset}")
-if args.dataset in ["DiscogsVI2", "DVI2"]:
+if args.dataset in ["DVI", "DiscogsVI2", "DVI2"]:
     # ********* DiscogsVI **********
     # Splits + Info
     splits = {}
