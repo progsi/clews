@@ -8,7 +8,7 @@ path:
   cache: "cache/"
   logs: "logs/"
   audio: "data/audio/"
-  meta: "cache/dvi.pt"
+  meta: "cache/diverse_tag_light.pt"
 
 fabric:
   nnodes: 1
@@ -21,7 +21,7 @@ data:
   audiolen: 150         # in seconds
   maxlen: null
   pad_mode: "repeat"
-  n_per_class: 4
+  n_per_class: 4 # might set higher than 4
   p_samesong: 0
 
 augmentations:
@@ -67,21 +67,30 @@ augmentations:
     r: [-12,12]
 
 model:
-  name: "dvinetp"
+  name: "clews"
   shingling:
-    len: 150            # in secs
-    hop: 150
+    len: 20             # in secs
+    hop: 20
   cqt:
-    hoplen: 0.02        # in seconds
-    noctaves: 7         # 8 
+    hoplen: 0.02        # in secs
+    noctaves: 7
     nbinsoct: 12
-    pool:
-      len: 17           # in hops
-      hop: 15
-  ncha_in: 48
-  zdim: 512
-  margin: 0.3
-  lamb: 0.02
+    fscale: 1
+    pool: 5             # in hops
+  frontend:
+    cqtpow: 0.5
+    channels: [128,256]
+  backbone:
+    blocks: [3,4,6,3]
+    channels: [256,512,1024,2048]
+    down: [1,2,2,1]
+  zdim: 1024
+  loss:
+    redux:
+      pos: "bpwr-3"
+      neg: "min"
+    gamma: 5
+    epsilon: 1e-6
 
 training:
   batchsize: 25         # using 2 GPUs         
@@ -89,7 +98,7 @@ training:
   save_freq: null       # in epochs
   optim:
     name: "adam"
-    lr: 3e-4
+    lr: 2e-4
     wd: 0
     sched: "plateau_10"
     min_lr: 1e-6

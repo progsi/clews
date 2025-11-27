@@ -11,6 +11,8 @@ import torchinfo
 from lib import augmentations, eval, dataset
 from utils import print_utils, pytorch_utils
 
+import faulthandler
+faulthandler.enable()
 
 #########################################################################################
 # Inits
@@ -30,6 +32,10 @@ fn_ckpt_epoch = os.path.join(conf.path.logs, "checkpoint_$epoch$.ckpt")
 
 if "limit_num" not in args:
     args.limit_num = None
+
+# TODO: implement valid every
+# if "valid_every" not in args:
+#     args.valid_every = 1
     
 # Init pytorch/Fabric
 torch.backends.cudnn.benchmark = True  # seems it is same speed as False?
@@ -148,7 +154,7 @@ dl_train = torch.utils.data.DataLoader(
     num_workers=conf.data.nworkers,
     drop_last=True,
     persistent_workers=False,
-    pin_memory=True,
+    pin_memory=True, 
 )
 dl_valid = torch.utils.data.DataLoader(
     ds_valid,
@@ -300,6 +306,7 @@ for epoch in range(start_epoch, conf.training.numepochs):
     logdict_train.sync_and_mean(fabric)
     fabric.log_dict(logdict_train.get(prefix="train/"), step=epoch + 1)
     # Valid
+    # TODO: implement valid_every: if (epoch + 1) % args.valid_every == 0:
     logdict_valid = valid_loop(desc="Valid " + desc)
     logdict_valid.sync_and_mean(fabric)
     fabric.log_dict(logdict_valid.get(prefix="valid/"), step=epoch + 1)

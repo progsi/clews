@@ -15,9 +15,29 @@ fi
 
 MODELSUB="${DATASET_TRAIN}-${MODEL}"
 
+csets=(
+  "acoustic"
+  "instrumental|karaoke"
+  "live"
+  "orchestra"
+  "firsttimehearing|firsttimereaction|reaction|reactsto|reactto"
+  "cover&bass"
+  "cover&drum"
+  "cover&guitar"
+  "cover&piano"
+  "solo&bass"
+  "solo&drum"
+  "solo&guitar"
+  "solo&piano"
+  "(howtoplay|lesson|tutorial)&bass"
+  "(howtoplay|lesson|tutorial)&drum"
+  "(howtoplay|lesson|tutorial)&guitar"
+  "(howtoplay|lesson|tutorial)&piano"
+)
+
 csdomains=(acoustic cover instrumental live youtube_music remix reaction tutorial)
 
-for cs in "${csdomains[@]}"; do
+for cs in "${csets[@]}"; do
     python test.py \
         jobname="${JOBNAME}" \
         checkpoint="logs/${MODELSUB}/checkpoint_best.ckpt" \
@@ -26,6 +46,6 @@ for cs in "${csdomains[@]}"; do
         path_meta="cache/${DATASET_TEST}.pt" \
         nnodes="$NNODES" \
         ngpus="$NGPUS" \
-        qfilter="dvi:1" \
-        cfilter=matched_concepts:"$cs"
+        qfilter="dvi:True" \
+        cfilter=tags_yt_title:"$cs"
 done

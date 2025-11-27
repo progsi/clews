@@ -4,6 +4,10 @@ import torch
 import numpy as np
 import torch.nn.functional as F
 from tqdm import tqdm
+import re
+import sympy
+from sympy.parsing.sympy_parser import parse_expr
+from functools import reduce
 
 from utils import audio_utils
 from lib import tensor_ops as tops
@@ -216,11 +220,10 @@ class FilterableDataset(Dataset):
     def __init__(self, conf, split, augment=False, fullsongs=False, checks=True, verbose=False, limit_cliques=None):
         super().__init__(conf, split, augment, fullsongs, checks, verbose, limit_cliques)
         self.DOMAINS = [
-            "matched_concepts", 
-            "matched_instruments_groups",
-            "matched_segments",
             "release_styles", 
-            "release_genres", 
+            "release_genres",
+            "tags_yt_title",
+            "tags_yt_description",
             "dvi"]
         self.verbose = verbose
         self.label2ids_map = {}
@@ -326,49 +329,32 @@ class FilterableDataset(Dataset):
         return torch.zeros(n)
 
     # ------------------- Filter by query/candidate -------------------
-    @staticmethod
-    def parse_filter_str(filter_str: str) -> dict:
-        """
-        Parse a filter string into a dictionary.
-        """
-        result = {}
-        if not filter_str:
-            return result
+    # @staticmethod
+    # def parse_filter_str(value_str: str) -> list[list[str]]:
+    #     """
+    #     Parse domain filter string into OR/AND structure.
+    #     Returns list of AND-clauses (each OR list), e.g.:
+    #     "rock|pop&jazz" -> [["rock"], ["pop","jazz"]]
+    #     """
+    #     if not value_str:
+    #         return []
 
-        # Split domains by ';'
-        domain_parts = filter_str.split(";")
-        for part in domain_parts:
-            if ":" not in part:
-                continue
-            key, value_str = part.split(":", 1)
-            key = key.strip()
-            value_str = value_str.strip()
-
-            # Split by ',' if multiple values
-            if "," in value_str:
-                values = [v.strip() for v in value_str.split(",")]
-                result[key] = values
-            else:
-                # Try to convert to int or float if possible
-                try:
-                    num = int(value_str)
-                    result[key] = num
-                except ValueError:
-                    try:
-                        num = float(value_str)
-                        result[key] = num
-                    except ValueError:
-                        result[key] = value_str
-        return result
+    #     or_parts = value_str.split("|")
+    #     clauses = []
+    #     for part in or_parts:
+    #         and_parts = [v.strip() for v in part.split("&") if v.strip()]
+    #         if and_parts:
+    #             clauses.append(and_parts)
+    #     return clauses
 
     # helper: normalize filter value into a list of tokens (handles single bool/int/str)
-    @staticmethod
-    def normalize_filter_values(v):
-        if v is None:
-            return None
-        if isinstance(v, (list, tuple)):
-            return list(v)
-        return [v]
+    # @staticmethod
+    # def normalize_filter_values(v):
+    #     if v is None:
+    #         return None
+    #     if isinstance(v, (list, tuple)):
+    #         return list(v)
+    #     return [v]
 
     # helper: convert label token -> indices in label2ids_map[domain]
     def label_tokens_to_indices(self, tokens, domain):
@@ -395,132 +381,206 @@ class FilterableDataset(Dataset):
         return sorted(set(idxs))
     
     # submask creation: if no filter values specified for side -> allow all
-    @staticmethod
-    def submask_matrix(x, idxs, device="cuda"):
-        # x: [rows, D]
-        if not idxs:
-            return torch.ones(x.shape[0], dtype=torch.bool, device=device)
-        cols = x[:, idxs]    # [rows, len(idxs)]
-        return cols.any(dim=1)  # [rows]
+    # @staticmethod
+    # def submask_matrix(x, idxs, device="cuda"):
+    #     # x: [rows, D]
+    #     if not idxs:
+    #         return torch.ones(x.shape[0], dtype=torch.bool, device=device)
+    #     cols = x[:, idxs]    # [rows, len(idxs)]
+    #     return cols.any(dim=1)  # [rows]
     
+    # def submask_matrix(x, clauses, mapdict, device="cuda"):
+    #     """
+    #     x: [N, D] multi-hot tensor
+    #     clauses: list of AND-clauses (list of label strings)
+    #     mapdict: label2ids_map for this domain
+    #     returns: [N] boolean mask
+    #     """
+    #     if not clauses:
+    #         return torch.ones(x.shape[0], dtype=torch.bool, device=device)
+
+    #     masks = []
+    #     for and_clause in clauses:
+    #         idxs = [mapdict[t] for t in and_clause if t in mapdict]
+    #         if not idxs:
+    #             continue
+    #         clause_mask = x[:, idxs].all(dim=1)   # AND within clause
+    #         masks.append(clause_mask)
+    #     if not masks:
+    #         return torch.zeros(x.shape[0], dtype=torch.bool, device=device)
+    #     return torch.stack(masks, dim=0).any(dim=0)  # OR across clauses
+    
+    # def evaluate_expr(self, x, expr, mapdict):
+    #     """
+    #     x: [N, D] multi-hot
+    #     expr: nested dict / string / NOT structure
+    #     returns: [N] boolean mask
+    #     """
+    #     if isinstance(expr, str):
+    #         if expr not in mapdict:
+    #             return torch.zeros(x.shape[0], dtype=torch.bool, device=x.device)
+    #         return x[:, mapdict[expr]]
+
+    #     if isinstance(expr, dict):
+    #         if "NOT" in expr:
+    #             return ~self.evaluate_expr(x, expr["NOT"], mapdict)
+    #         if "AND" in expr:
+    #             masks = [self.evaluate_expr(x, sub, mapdict) for sub in expr["AND"]]
+    #             return torch.stack(masks, dim=0).all(dim=0)
+    #         if "OR" in expr:
+    #             masks = [self.evaluate_expr(x, sub, mapdict) for sub in expr["OR"]]
+    #             return torch.stack(masks, dim=0).any(dim=0)
+    #     raise ValueError(f"Invalid expr: {expr}")
+    
+    def parse_filter_str(self, filter_str: str):
+            """
+            Convert a filter string like "A | B & ~C" into a SymPy expression.
+            """
+            if filter_str is None:
+                return None
+            # if domain prefix exists, remove it
+            if ':' in filter_str:
+                _, expr = filter_str.split(':', 1)
+            else:
+                expr = filter_str
+            # parse logical expression
+            return parse_expr(expr, evaluate=False)
+
+    def evaluate_expr(self, tensor: torch.Tensor, expr, label2id: dict):
+        """
+        Evaluate a SymPy logical expression on a multi-hot tensor.
+        tensor: [N, D] multi-hot or one-hot
+        expr: SymPy expression
+        label2id: dict mapping label names to column indices in tensor
+        Returns: [N] boolean tensor
+        """
+        if expr is None:
+            return torch.ones(tensor.shape[0], dtype=torch.bool, device=tensor.device)
+
+        def eval_node(node):
+            # if isinstance(node, sympy.Symbol) or isinstance(node, str):
+            #     idx = label2id[str(node)]
+            #     return tensor[:, idx].bool()
+            if isinstance(node, sympy.Not):
+                return ~eval_node(node.args[0])
+            elif isinstance(node, sympy.And):
+                return reduce(lambda a, b: a & b, [eval_node(a) for a in node.args])
+            elif isinstance(node, sympy.Or):
+                return reduce(lambda a, b: a | b, [eval_node(a) for a in node.args])
+            else:
+                idx = label2id[str(node)]
+                return tensor[:, idx].bool()
+
+        return eval_node(expr)
+
     def get_filter_mask_full(
-                self,
-                query_filter_str: dict | str | None = None,
-                candidate_filter_str: dict | str | None = None,
-                query_i: torch.Tensor | list[int] = None,
-                cand_i: torch.Tensor | list[int] = None,
-                query_c: torch.Tensor | list[int] = None,
-                cand_c: torch.Tensor | list[int] = None,
-                device: torch.device = "cuda"
-            ) -> tuple[torch.BoolTensor, torch.Tensor]:
-            """
-            Generic pair-mode mask using arbitrary domains. Filters can be dicts or strings.
-            """
+        self,
+        query_filter_str: dict | str | None = None,
+        candidate_filter_str: dict | str | None = None,
+        query_i: torch.Tensor | list[int] = None,
+        cand_i: torch.Tensor | list[int] = None,
+        query_c: torch.Tensor | list[int] = None,
+        cand_c: torch.Tensor | list[int] = None,
+        device: torch.device = "cuda"
+    ) -> tuple[torch.BoolTensor, torch.Tensor]:
+        """
+        Generic pair-mode mask using arbitrary domains. Filters can be dicts or strings.
+        """
 
-            # --- normalize filter inputs to dicts ---
-            if isinstance(query_filter_str, str):
-                query_filter = self.parse_filter_str(query_filter_str)
-            elif isinstance(query_filter_str, dict):
-                query_filter = query_filter_str
-            else:
-                query_filter = {}
+        # --- normalize filter inputs to dicts ---
+        if isinstance(query_filter_str, str):
+            query_filter = {k: self.parse_filter_str(v) for k, v in [query_filter_str.split(':')]}
+        elif isinstance(query_filter_str, dict):
+            query_filter = {k: self.parse_filter_str(v) for k, v in query_filter_str.items()}
+        else:
+            query_filter = {}
 
-            if isinstance(candidate_filter_str, str):
-                candidate_filter = self.parse_filter_str(candidate_filter_str)
-            elif isinstance(candidate_filter_str, dict):
-                candidate_filter = candidate_filter_str
-            else:
-                candidate_filter = {}
+        if isinstance(candidate_filter_str, str):
+            candidate_filter = {k: self.parse_filter_str(v) for k, v in [candidate_filter_str.split(':')]}
+        elif isinstance(candidate_filter_str, dict):
+            candidate_filter = {k: self.parse_filter_str(v) for k, v in candidate_filter_str.items()}
+        else:
+            candidate_filter = {}
 
-            # prepare indexing for later
-            all_keys = list(self.info.keys())                    
-            key2pos = {k: i for i, k in enumerate(all_keys)}
-            N = len(all_keys)
+        # --- prepare indexing ---
+        all_keys = list(self.info.keys())
+        key2pos = {k: i for i, k in enumerate(all_keys)}
+        N = len(all_keys)
 
-            # resolve query / candidate subsets -> positions in original order to index domain tensor later
-            if query_i is not None:
-                # query_i are dataset ids/indices that map via id2key -> key -> pos
-                q_keys = [self.id2key[int(i)] for i in query_i]
-                q_pos = [key2pos[k] for k in q_keys]
-            else:
-                q_pos = list(range(N))
+        # query subset positions
+        if query_i is not None:
+            q_keys = [self.id2key[int(i)] for i in query_i]
+            q_pos = [key2pos[k] for k in q_keys]
+        else:
+            q_pos = list(range(N))
 
-            if cand_i is not None:
-                c_keys = [self.id2key[int(i)] for i in cand_i]
-                c_pos = [key2pos[k] for k in c_keys]
-            else:
-                c_pos = list(range(N))
+        # candidate subset positions
+        if cand_i is not None:
+            c_keys = [self.id2key[int(i)] for i in cand_i]
+            c_pos = [key2pos[k] for k in c_keys]
+        else:
+            c_pos = list(range(N))
 
-            Q = len(q_pos)
-            C = len(c_pos)
+        Q = len(q_pos)
+        C = len(c_pos)
 
-            # start with all-True mask
-            mask = torch.ones((Q, C), dtype=torch.bool, device=device)
+        # start with all-True mask
+        mask = torch.ones((Q, C), dtype=torch.bool, device=device)
 
-            # domains requested by either filter
-            filter_domains = set(query_filter.keys()) | set(candidate_filter.keys())
+        # iterate over filter domains
+        filter_domains = set(query_filter.keys()) | set(candidate_filter.keys())
 
-            # iterate domains from filters; ignore unknown domains gracefully
-            for domain in filter_domains:
-                if domain not in self.label2ids_map:
-                    # unknown domain -> skip (alternatively: raise)
-                    print(f"[get_filter_mask] unknown domain '{domain}' -> ignoring")
-                    continue
+        for domain in filter_domains:
+            if domain not in self.label2ids_map:
+                print(f"[get_filter_mask] unknown domain '{domain}' -> ignoring")
+                continue
 
-                # number of classes for this domain
-                D = len(self.label2ids_map[domain])
-                if D == 0:
-                    # nothing to filter on this domain
-                    continue
+            D = len(self.label2ids_map[domain])
+            if D == 0:
+                continue
 
-                # build domain_tensor [N, D] by stacking per-item vectors from self.domains_processed
-                domain_tensor = self.domains_processed[domain]
-                # now build pair mask for this domain for the chosen subsets q_pos / c_pos
-                q_x = domain_tensor[q_pos]  # [Q, D]
-                c_x = domain_tensor[c_pos]  # [C, D]
+            # domain tensor [N, D]
+            domain_tensor = self.domains_processed[domain]
+            q_x = domain_tensor[q_pos]  # [Q, D]
+            c_x = domain_tensor[c_pos]  # [C, D]
 
-                # get requested filter values for this domain
-                q_vals = self.normalize_filter_values(query_filter.get(domain, None))
-                c_vals = self.normalize_filter_values(candidate_filter.get(domain, None))
+            # query mask
+            q_expr = query_filter.get(domain, None)
+            q_mask = self.evaluate_expr(q_x, q_expr, self.label2ids_map[domain])
 
-                q_idxs = self.label_tokens_to_indices(q_vals, domain)
-                c_idxs = self.label_tokens_to_indices(c_vals, domain)
+            # candidate mask
+            c_expr = candidate_filter.get(domain, None)
+            c_mask = self.evaluate_expr(c_x, c_expr, self.label2ids_map[domain])
 
-                q_mask = self.submask_matrix(q_x, q_idxs, device)  # [Q]
-                c_mask = self.submask_matrix(c_x, c_idxs, device)  # [C]
+            # combine into pair mask
+            domain_pair_mask = q_mask.unsqueeze(1) & c_mask.unsqueeze(0)
+            mask = mask & domain_pair_mask.to(device)
 
-                domain_pair_mask = q_mask.unsqueeze(1) & c_mask.unsqueeze(0).to(q_mask.device)  # [Q, C]
-                mask = mask & domain_pair_mask.to(mask.device)
+        # set diagonal to False for self-matches
+        if query_i is not None and cand_i is not None:
+            q_idx_tensor = torch.as_tensor(list(query_i), device=device)
+            c_idx_tensor = torch.as_tensor(list(cand_i), device=device)
+            self_mask = q_idx_tensor[:, None] == c_idx_tensor[None, :]
+            mask &= ~self_mask
 
-            # set diagonal (self-matches) to False
-            if query_i is not None and cand_i is not None:
-                q_idx_tensor = torch.as_tensor(list(query_i), device=device)
-                c_idx_tensor = torch.as_tensor(list(cand_i), device=device)
-                self_mask = q_idx_tensor[:, None] == c_idx_tensor[None, :]
-                mask = mask & ~self_mask
+        # relevance filtering
+        if query_c is not None and cand_c is not None:
+            query_c = query_c.to(device)
+            cand_c = cand_c.to(device)
+            rel_mask = query_c[:, None] == cand_c[None, :]
+            rel_mask &= mask
+            has_rel = rel_mask.any(dim=1) & (~rel_mask).any(dim=1)
+        else:
+            has_rel = mask.any(dim=1) & (~mask).any(dim=1)
 
-            # relevance filtering: keep rows with at least one relevant candidate and at least one non-relevant (exclude no-rel and all-rel)
-            if query_c is not None and cand_c is not None:
-                query_c = query_c.to(device)
-                cand_c = cand_c.to(device)
-                rel_mask = query_c[:, None] == cand_c[None, :]
-                # consider only candidates allowed by domain mask
-                rel_mask = rel_mask & mask
-                # keep only queries that have at least one relevant AND at least one non-relevant
-                has_rel = rel_mask.any(dim=1) & (~rel_mask).any(dim=1)
-            else:
-                # fallback: keep queries that have at least one allowed candidate and at least one disallowed
-                has_rel = mask.any(dim=1) & (~mask).any(dim=1)
+        if len(has_rel) == 0:
+            local_idxs = torch.empty(0, dtype=torch.long, device=device)
+            filtered_mask = mask[has_rel]
+        else:
+            local_idxs = torch.where(has_rel)[0]
+            filtered_mask = mask[local_idxs, :]
 
-            # map local indices back to original positions
-            if len(has_rel) == 0:
-                local_idxs = torch.empty(0, dtype=torch.long, device=device)
-                filtered_mask = mask[has_rel]
-            else:
-                local_idxs = torch.where(has_rel)[0]  # indices into q_pos (0..Q-1)
-                filtered_mask = mask[local_idxs, :]  # [Q_filtered, C]
-
-            return filtered_mask, local_idxs
+        return filtered_mask, local_idxs
         
     def get_filter_mask_batchwise(
         self,
@@ -580,15 +640,27 @@ class FilterableDataset(Dataset):
             q_x = domain_tensor[q_pos]
             c_x = domain_tensor[c_pos]
 
-            q_vals = self.normalize_filter_values(query_filter.get(domain, None))
-            c_vals = self.normalize_filter_values(candidate_filter.get(domain, None))
+            # q_vals = self.normalize_filter_values(query_filter.get(domain, None))
+            # c_vals = self.normalize_filter_values(candidate_filter.get(domain, None))
 
-            q_idxs = self.label_tokens_to_indices(q_vals, domain)
-            c_idxs = self.label_tokens_to_indices(c_vals, domain)
+            # q_idxs = self.label_tokens_to_indices(q_vals, domain)
+            # c_idxs = self.label_tokens_to_indices(c_vals, domain)
 
-            q_mask = self.submask_matrix(q_x, q_idxs, device=device)
-            c_mask = self.submask_matrix(c_x, c_idxs, device=device)
+            # q_mask = self.submask_matrix(q_x, q_idxs, device=device)
+            # c_mask = self.submask_matrix(c_x, c_idxs, device=device)
 
+            q_clause_str = query_filter.get(domain, None)
+            # q_clauses = self.parse_filter_str(q_clause_str) if isinstance(q_clause_str, str) else q_clause_str
+            # q_mask = self.submask_matrix(q_x, q_clauses, self.label2ids_map[domain], device)
+            q_tree = self.parse_filter_str(q_clause_str)  # tree with AND/OR/NOT
+            q_mask = self.evaluate_expr(q_x, q_tree, self.label2ids_map[domain])
+            
+            c_clause_str = query_filter.get(domain, None)
+            # c_clauses = self.parse_filter_str(c_clause_str) if isinstance(c_clause_str, str) else c_clause_str
+            # c_mask = self.submask_matrix(c_x, c_clauses, self.label2ids_map[domain], device)
+            c_tree = self.parse_filter_str(c_clause_str)  # tree with AND/OR/NOT
+            c_mask = self.evaluate_expr(c_x, c_tree, self.label2ids_map[domain])
+            
             # batchwise combination
             for start in range(0, Q, batch_size):
                 end = min(start + batch_size, Q)

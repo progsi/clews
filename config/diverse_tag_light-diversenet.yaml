@@ -8,7 +8,7 @@ path:
   cache: "cache/"
   logs: "logs/"
   audio: "data/audio/"
-  meta: "cache/dvi.pt"
+  meta: "cache/diverse_tag_light.pt"
 
 fabric:
   nnodes: 1
@@ -21,7 +21,7 @@ data:
   audiolen: 150         # in seconds
   maxlen: null
   pad_mode: "repeat"
-  n_per_class: 4
+  n_per_class: 5 # set higher, because higher mean number of tracks per class
   p_samesong: 0
 
 augmentations:
@@ -76,15 +76,15 @@ model:
     noctaves: 7         # 8 
     nbinsoct: 12
     pool:
-      len: 17           # in hops
-      hop: 15
-  ncha_in: 48
-  zdim: 512
+      len: 5           # original: 17
+      hop: 5          # original: 17
+  ncha_in: 64        # original: 48
+  zdim: 1024         # original: 512
   margin: 0.3
   lamb: 0.02
 
 training:
-  batchsize: 25         # using 2 GPUs         
+  batchsize: 20         # using 2 GPUs         
   numepochs: 1000
   save_freq: null       # in epochs
   optim:

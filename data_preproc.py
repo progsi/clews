@@ -82,8 +82,8 @@ def load_cliques_discogsvi(fn, i=0):
                 "id": i,
                 "clique": c,
                 "version": v,
-                "artist": data["artist"] if "artist" in data else "?",
-                "title": data["title"] if "title" in data else "?",
+                "artist": data["artist"] if "artist" in data else None,
+                "title": data["title"] if "title" in data else None,
                 "filename": os.path.join(basename + "." + args.ext_in),
             }
             i += 1

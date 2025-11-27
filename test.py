@@ -396,7 +396,7 @@ def evaluate(batch_size_candidates=2**15):
                 batch_start=total_saved,
                 hop=args.qshop,
             )
-            myprint(f"MAP {torch.stack(buffer['aps']).mean().item():.3f}; MR1 {torch.stack(buffer['r1s']).mean().item():.3f}. Saved measures at batch {step + 1}.")
+            myprint(f"MAP {torch.stack(buffer['aps']).mean().item():.3f}; ARP {torch.stack(buffer['rpcs']).mean().item():.3f}. MR1 {torch.stack(buffer['r1s']).mean().item():.3f}. Saved measures at batch {step + 1}.")
         step += 1
               
         aps = torch.stack(buffer["aps"])
