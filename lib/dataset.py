@@ -593,90 +593,65 @@ class FilterableDataset(Dataset):
         device="cuda",
         batch_size: int = 4096
     ):
-        """
-        Batchwise version of get_filter_mask to avoid OOM.
-        batch_size controls how many query rows are processed at once.
-        """
         # --- normalize filter inputs ---
         if isinstance(query_filter_str, str):
-            query_filter = self.parse_filter_str(query_filter_str)
+            query_filter = {k: self.parse_filter_str(v) for k, v in [query_filter_str.split(':')]}
         elif isinstance(query_filter_str, dict):
-            query_filter = query_filter_str
+            query_filter = {k: self.parse_filter_str(v) for k, v in query_filter_str.items()}
         else:
             query_filter = {}
 
         if isinstance(candidate_filter_str, str):
-            candidate_filter = self.parse_filter_str(candidate_filter_str)
+            candidate_filter = {k: self.parse_filter_str(v) for k, v in [candidate_filter_str.split(':')]}
         elif isinstance(candidate_filter_str, dict):
-            candidate_filter = candidate_filter_str
+            candidate_filter = {k: self.parse_filter_str(v) for k, v in candidate_filter_str.items()}
         else:
             candidate_filter = {}
 
+        # --- prepare indices ---
         all_keys = list(self.info.keys())
         key2pos = {k: i for i, k in enumerate(all_keys)}
         N = len(all_keys)
 
         q_pos = [key2pos[self.id2key[int(i)]] for i in query_i] if query_i is not None else list(range(N))
         c_pos = [key2pos[self.id2key[int(i)]] for i in cand_i] if cand_i is not None else list(range(N))
-
         Q, C = len(q_pos), len(c_pos)
 
-        # Start with full mask
+        # start with all True
         mask = torch.ones((Q, C), dtype=torch.bool, device=device)
 
-        # --- domain filtering (batchwise) ---
+        # --- domain filtering ---
         filter_domains = set(query_filter.keys()) | set(candidate_filter.keys())
 
         for domain in filter_domains:
-            if domain not in self.label2ids_map:
-                continue
-            D = len(self.label2ids_map[domain])
-            if D == 0:
+            if domain not in self.label2ids_map or len(self.label2ids_map[domain]) == 0:
                 continue
 
-            # build domain_tensor [N, D]
             domain_tensor = self.domains_processed[domain]
-
             q_x = domain_tensor[q_pos]
             c_x = domain_tensor[c_pos]
 
-            # q_vals = self.normalize_filter_values(query_filter.get(domain, None))
-            # c_vals = self.normalize_filter_values(candidate_filter.get(domain, None))
+            q_mask = self.evaluate_expr(q_x, query_filter.get(domain, None), self.label2ids_map[domain])
+            c_mask = self.evaluate_expr(c_x, candidate_filter.get(domain, None), self.label2ids_map[domain])
 
-            # q_idxs = self.label_tokens_to_indices(q_vals, domain)
-            # c_idxs = self.label_tokens_to_indices(c_vals, domain)
-
-            # q_mask = self.submask_matrix(q_x, q_idxs, device=device)
-            # c_mask = self.submask_matrix(c_x, c_idxs, device=device)
-
-            q_clause_str = query_filter.get(domain, None)
-            # q_clauses = self.parse_filter_str(q_clause_str) if isinstance(q_clause_str, str) else q_clause_str
-            # q_mask = self.submask_matrix(q_x, q_clauses, self.label2ids_map[domain], device)
-            q_tree = self.parse_filter_str(q_clause_str)  # tree with AND/OR/NOT
-            q_mask = self.evaluate_expr(q_x, q_tree, self.label2ids_map[domain])
-            
-            c_clause_str = query_filter.get(domain, None)
-            # c_clauses = self.parse_filter_str(c_clause_str) if isinstance(c_clause_str, str) else c_clause_str
-            # c_mask = self.submask_matrix(c_x, c_clauses, self.label2ids_map[domain], device)
-            c_tree = self.parse_filter_str(c_clause_str)  # tree with AND/OR/NOT
-            c_mask = self.evaluate_expr(c_x, c_tree, self.label2ids_map[domain])
-            
             # batchwise combination
+            mask_chunks = []
             for start in range(0, Q, batch_size):
                 end = min(start + batch_size, Q)
-                mask = mask.to(q_mask.device)   # ensure mask is on GPU
-                mask[start:end] &= q_mask[start:end, None] & c_mask[None, :].to(q_mask.device)
+                batch_mask = (q_mask[start:end, None] & c_mask[None, :]).to(mask.device)
+                mask_chunks.append(mask[start:end, :] & batch_mask)
 
-        # --- self matches (batchwise) ---
+            mask = torch.cat(mask_chunks, dim=0)
+
+        # --- self matches ---
         if query_i is not None and cand_i is not None:
             q_idx_tensor = torch.as_tensor(list(query_i), device=device)
             c_idx_tensor = torch.as_tensor(list(cand_i), device=device)
             for start in range(0, Q, batch_size):
                 end = min(start + batch_size, Q)
-                mask = mask.to(q_idx_tensor.device)   # ensure mask is on GPU
-                mask[start:end] &= ~(q_idx_tensor[start:end, None] == c_idx_tensor[None, :]).to(q_idx_tensor.device)
+                mask[start:end] &= ~(q_idx_tensor[start:end, None] == c_idx_tensor[None, :])
 
-        # --- relevance filtering (batchwise) ---
+        # --- relevance filtering ---
         if query_c is not None and cand_c is not None:
             query_c = query_c.to(device)
             cand_c = cand_c.to(device)
@@ -694,7 +669,6 @@ class FilterableDataset(Dataset):
 
         local_idxs = torch.where(has_rel)[0]
         filtered_mask = mask[local_idxs, :]
-
         return filtered_mask, local_idxs
 
     def get_filter_mask(

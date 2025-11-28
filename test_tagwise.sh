@@ -35,8 +35,6 @@ csets=(
   "(howtoplay|lesson|tutorial)&piano"
 )
 
-csdomains=(acoustic cover instrumental live youtube_music remix reaction tutorial)
-
 for cs in "${csets[@]}"; do
     python test.py \
         jobname="${JOBNAME}" \
@@ -46,6 +44,6 @@ for cs in "${csets[@]}"; do
         path_meta="cache/${DATASET_TEST}.pt" \
         nnodes="$NNODES" \
         ngpus="$NGPUS" \
-        qfilter="dvi:True" \
+        qfilter=dvi:True \
         cfilter=tags_yt_title:"$cs"
 done
