@@ -113,12 +113,21 @@ if conf.checkpoint is not None:
     fn_ckpt = conf.checkpoint
 elif os.path.exists(fn_ckpt_last):
     fn_ckpt = fn_ckpt_last
-if fn_ckpt is not None:
+if fn_ckpt is not None and os.path.exists(fn_ckpt):
     myprint("Loading checkpoint...")
-    state = pytorch_utils.get_state(model, optim, sched, conf, epoch, lr, cost_best)
-    fabric.load(fn_ckpt, state)
-    model, optim, sched, conf, epoch, lr, cost_best = pytorch_utils.set_state(state)
-    myprint("  Loaded " + fn_ckpt)
+    checkpoint = torch.load(fn_ckpt, map_location="cpu")
+    # --- Load model weights only ---
+    if len(checkpoint) == 1 and "model" in checkpoint:
+        model.load_state_dict(checkpoint["model"])
+        myprint(f"  Loaded model weights from {fn_ckpt}")
+    # --- Load full training state ---
+    else:
+        myprint("Loading checkpoint...")
+        state = pytorch_utils.get_state(model, optim, sched, conf, epoch, lr, cost_best)
+        fabric.load(fn_ckpt, state)
+        model, optim, sched, conf, epoch, lr, cost_best = pytorch_utils.set_state(state)
+        myprint("  Loaded " + fn_ckpt)
+
 
 # Re-seed with global_rank to have truly different augmentations
 myprint("Re-seed...")

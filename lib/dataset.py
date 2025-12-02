@@ -467,8 +467,10 @@ class FilterableDataset(Dataset):
                 return reduce(lambda a, b: a & b, [eval_node(a) for a in node.args])
             elif isinstance(node, sympy.Or):
                 return reduce(lambda a, b: a | b, [eval_node(a) for a in node.args])
-            else:
-                idx = label2id[str(node)]
+            else: 
+                idx = label2id.get(str(node), None) 
+                if idx is None: 
+                    return torch.zeros(tensor.shape[0], dtype=torch.bool, device=tensor.device) 
                 return tensor[:, idx].bool()
 
         return eval_node(expr)
